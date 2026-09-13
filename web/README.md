@@ -29,6 +29,7 @@ export:
 |---|---|
 | `kept-files.zip` | every file you kept, original folder structure preserved |
 | `kept-images.pdf` | the kept raster images as one PDF |
+| `<folder>.pdf` | optionally, one PDF per folder |
 | `vismanager-notes.txt` | flagged files and their notes, grouped by folder |
 | `delete-list.txt` | the paths you marked for deletion, with commands to act on them |
 
@@ -39,7 +40,11 @@ PowerShell.
 ## Shortcuts
 
 `K` keep · `D` delete · `Space` toggle · `N` note · `F` flag ·
-`←` `→` images · `,` `.` folders · `=` `-` zoom · `0` fit
+`←` `→` images · `,` `.` folders · `[` `]` rotate · `H` `V` flip ·
+`=` `-` zoom · `0` fit · `I` 3D settings · `F11` fullscreen
+
+All of these are **rebindable** — click the keyboard button in the toolbar.
+Custom bindings are stored in the browser.
 
 ## Format support
 
@@ -65,6 +70,18 @@ the subject fills the view instead of floating in empty space.
 **Cube files render in 3D.** Isosurfaces are extracted in-page and drawn with
 three.js, with a ball-and-stick molecule alongside. Drag to orbit, scroll to
 zoom, and use the isosurface bar to change the level.
+
+Surface quality comes from three steps: consistent triangle winding (without
+it roughly half the faces point backwards and the surface shades as a
+patchwork — mean angle between neighbouring faces was 68 degrees, now 3),
+vertex welding (83% fewer vertices to upload), and optional Taubin smoothing,
+which removes faceting without the shrinkage plain Laplacian smoothing causes.
+
+Bond detection follows OpenBabel's `ConnectTheDots`, which is what Avogadro
+uses: bond when the separation is within the summed Cordero covalent radii
+plus a slack of 0.45 A, then prune by valence. The slack is adjustable in the
+settings panel. An additive tolerance behaves far better than a multiplicative
+one on mixed organic/metal structures.
 
 Two implementation notes. The surface uses marching *tetrahedra* rather than
 marching cubes: it needs no 256-entry lookup table, so there is nothing to

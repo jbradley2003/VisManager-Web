@@ -183,15 +183,31 @@ function isosurface(grid, iso) {
     return {p, n};
   };
 
+  const sign = iso >= 0 ? -1 : 1;
+
   const emit = (v0, v1, v2) => {
-    for (const v of [v0, v1, v2]) {
+    // Marching tetrahedra does not produce a consistent winding on its own:
+    // the vertex order depends on which corners happened to be inside, so
+    // roughly half the triangles come out facing backwards. Adjacent faces
+    // then disagree by 180 degrees and the surface shades as a patchwork,
+    // which is what made the lobes look choppy. Orient each triangle against
+    // the field gradient so the whole mesh winds the same way.
+    const ux = v1.p[0] - v0.p[0], uy = v1.p[1] - v0.p[1], uz = v1.p[2] - v0.p[2];
+    const vx = v2.p[0] - v0.p[0], vy = v2.p[1] - v0.p[1], vz = v2.p[2] - v0.p[2];
+    const fx = uy * vz - uz * vy, fy = uz * vx - ux * vz, fz = ux * vy - uy * vx;
+
+    const gx = (v0.n[0] + v1.n[0] + v2.n[0]) * sign;
+    const gy = (v0.n[1] + v1.n[1] + v2.n[1]) * sign;
+    const gz = (v0.n[2] + v1.n[2] + v2.n[2]) * sign;
+
+    const tri = (fx * gx + fy * gy + fz * gz) >= 0 ? [v0, v1, v2] : [v0, v2, v1];
+    for (const v of tri) {
       positions.push(v.p[0], v.p[1], v.p[2]);
       // The gradient points along increasing field value; the outward normal
       // of a positive lobe is the other way.
-      let [a, b, c] = v.n;
+      const [a, b, c] = v.n;
       const len = Math.hypot(a, b, c) || 1;
-      const s = iso >= 0 ? -1 : 1;
-      normals.push(s * a / len, s * b / len, s * c / len);
+      normals.push(sign * a / len, sign * b / len, sign * c / len);
     }
   };
 
@@ -240,6 +256,108 @@ function isosurface(grid, iso) {
           normals: new Float32Array(normals)};
 }
 
+/**
+ * Weld duplicate vertices into an indexed mesh.
+ *
+ * Marching tetrahedra emits every triangle with its own three vertices, so
+ * adjacent faces share no data and there is nothing to smooth across. Welding
+ * on quantised position recovers the connectivity.
+ */
+function weld(positions, normals, tol = 1e-4) {
+  const map = new Map();
+  const verts = [], norms = [], indices = [];
+  const q = 1 / tol;
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i], y = positions[i + 1], z = positions[i + 2];
+    const key = `${Math.round(x * q)},${Math.round(y * q)},${Math.round(z * q)}`;
+    let idx = map.get(key);
+    if (idx === undefined) {
+      idx = verts.length / 3;
+      map.set(key, idx);
+      verts.push(x, y, z);
+      norms.push(normals[i], normals[i + 1], normals[i + 2]);
+    }
+    indices.push(idx);
+  }
+  return {positions: new Float32Array(verts),
+          normals: new Float32Array(norms),
+          indices: new Uint32Array(indices)};
+}
+
+/**
+ * Taubin smoothing (lambda/mu).
+ *
+ * Plain Laplacian smoothing shrinks a closed surface a little more with every
+ * pass, so an orbital lobe visibly deflates. Taubin alternates a positive and
+ * a slightly larger negative step, which removes the faceting while keeping
+ * the volume — the same trick VTK's windowed-sinc filter uses in the desktop
+ * build.
+ */
+function smoothMesh(mesh, iterations = 12, lambda = 0.5, mu = -0.53) {
+  const {positions, indices} = mesh;
+  const n = positions.length / 3;
+
+  // Neighbour lists from the triangle edges
+  const nbr = Array.from({length: n}, () => new Set());
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i], b = indices[i + 1], c = indices[i + 2];
+    nbr[a].add(b); nbr[a].add(c);
+    nbr[b].add(a); nbr[b].add(c);
+    nbr[c].add(a); nbr[c].add(b);
+  }
+  const flat = nbr.map(s2 => [...s2]);
+
+  let cur = positions;
+  const step = (factor) => {
+    const out = new Float32Array(cur.length);
+    for (let v = 0; v < n; v++) {
+      const list = flat[v];
+      if (!list.length) {
+        out[v * 3] = cur[v * 3];
+        out[v * 3 + 1] = cur[v * 3 + 1];
+        out[v * 3 + 2] = cur[v * 3 + 2];
+        continue;
+      }
+      let sx = 0, sy = 0, sz = 0;
+      for (const j of list) { sx += cur[j * 3]; sy += cur[j * 3 + 1]; sz += cur[j * 3 + 2]; }
+      const k = list.length;
+      out[v * 3]     = cur[v * 3]     + factor * (sx / k - cur[v * 3]);
+      out[v * 3 + 1] = cur[v * 3 + 1] + factor * (sy / k - cur[v * 3 + 1]);
+      out[v * 3 + 2] = cur[v * 3 + 2] + factor * (sz / k - cur[v * 3 + 2]);
+    }
+    cur = out;
+  };
+  for (let i = 0; i < iterations; i++) { step(lambda); step(mu); }
+
+  return {positions: cur, indices, normals: recomputeNormals(cur, indices)};
+}
+
+/** Area-weighted vertex normals, which is what makes shading look smooth. */
+function recomputeNormals(positions, indices) {
+  const normals = new Float32Array(positions.length);
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i] * 3, b = indices[i + 1] * 3, c = indices[i + 2] * 3;
+    const ux = positions[b] - positions[a],
+          uy = positions[b + 1] - positions[a + 1],
+          uz = positions[b + 2] - positions[a + 2];
+    const vx = positions[c] - positions[a],
+          vy = positions[c + 1] - positions[a + 1],
+          vz = positions[c + 2] - positions[a + 2];
+    // Cross product magnitude is twice the area, so no normalising here
+    const nx = uy * vz - uz * vy,
+          ny = uz * vx - ux * vz,
+          nz = ux * vy - uy * vx;
+    for (const o of [a, b, c]) {
+      normals[o] += nx; normals[o + 1] += ny; normals[o + 2] += nz;
+    }
+  }
+  for (let i = 0; i < normals.length; i += 3) {
+    const len = Math.hypot(normals[i], normals[i + 1], normals[i + 2]) || 1;
+    normals[i] /= len; normals[i + 1] /= len; normals[i + 2] /= len;
+  }
+  return normals;
+}
+
 /* ── Chemistry helpers ───────────────────────────────────────────────────── */
 const SYMBOLS = ['n', 'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne',
   'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar', 'K', 'Ca', 'Sc', 'Ti', 'V',
@@ -257,9 +375,15 @@ const ELEMENT_COLOR = {
   26: 0xe06633, 29: 0xc88033, 30: 0x7d80b0, 44: 0x248f8f, 45: 0x0a7d8c
 };
 // Covalent radii in Angstrom, used for both atom size and bond detection.
+// Cordero et al. covalent radii (Angstrom) — the same source Avogadro uses.
 const COVALENT = {
-  1: 0.31, 5: 0.84, 6: 0.76, 7: 0.71, 8: 0.66, 9: 0.57, 14: 1.11, 15: 1.07,
-  16: 1.05, 17: 1.02, 26: 1.32, 29: 1.32, 30: 1.22, 35: 1.20, 53: 1.39
+  1: 0.31, 2: 0.28, 3: 1.28, 4: 0.96, 5: 0.84, 6: 0.76, 7: 0.71, 8: 0.66,
+  9: 0.57, 10: 0.58, 11: 1.66, 12: 1.41, 13: 1.21, 14: 1.11, 15: 1.07,
+  16: 1.05, 17: 1.02, 18: 1.06, 19: 2.03, 20: 1.76, 21: 1.70, 22: 1.60,
+  23: 1.53, 24: 1.39, 25: 1.39, 26: 1.32, 27: 1.26, 28: 1.24, 29: 1.32,
+  30: 1.22, 31: 1.22, 32: 1.20, 33: 1.19, 34: 1.20, 35: 1.20, 36: 1.16,
+  42: 1.54, 44: 1.46, 45: 1.42, 46: 1.39, 47: 1.45, 48: 1.44, 53: 1.39,
+  77: 1.41, 78: 1.36, 79: 1.36, 80: 1.32
 };
 
 const symbolOf = z => SYMBOLS[z] || `Z${z}`;
@@ -273,7 +397,7 @@ const radiusOf = z => COVALENT[z] ?? 0.9;
  * guessed. The usual rule — within 45% of the summed covalent radii — is what
  * VMD and VESTA effectively use.
  */
-function inferBonds(atoms, tolerance = 0.30) {
+function inferBonds(atoms, tolerance = 0.45) {
   const candidates = [];
   for (let i = 0; i < atoms.length; i++) {
     for (let j = i + 1; j < atoms.length; j++) {
@@ -282,14 +406,23 @@ function inferBonds(atoms, tolerance = 0.30) {
       // web of spurious bonds through the middle of crowded structures.
       if (a.z === 1 && b.z === 1) continue;
       const d = Math.hypot(a.x - b.x, a.y - b.y, a.zc - b.zc);
-      const limit = (radiusOf(a.z) + radiusOf(b.z)) * (1 + tolerance);
+      // OpenBabel's ConnectTheDots rule, which is what Avogadro uses:
+      // bond when the separation is within the summed covalent radii plus a
+      // fixed slack. An additive tolerance behaves far better than a
+      // multiplicative one across mixed light/heavy structures, because a
+      // percentage of a large metal radius is a much bigger absolute window
+      // than the same percentage of a C-H pair.
+      const limit = radiusOf(a.z) + radiusOf(b.z) + tolerance;
       if (d > 0.4 && d <= limit) candidates.push({i, j, d});
     }
   }
   // Shortest first, so when an atom hits its valence cap the bonds it keeps
   // are the physically plausible ones.
   candidates.sort((p, q) => p.d - q.d);
-  const MAXB = {1: 1, 8: 2, 7: 4, 6: 4};
+  // Hydrogen and halogens are terminal; second-row elements follow the octet.
+  // Metals are left uncapped, since coordination numbers of 4-6 are normal.
+  const MAXB = {1: 1, 9: 1, 17: 1, 35: 1, 53: 1,
+                8: 2, 16: 2, 7: 4, 15: 4, 6: 4, 14: 4};
   const used = new Array(atoms.length).fill(0);
   const bonds = [];
   for (const c of candidates) {
@@ -303,9 +436,11 @@ function inferBonds(atoms, tolerance = 0.30) {
 
 if (typeof window !== 'undefined') {
   window.CubeLib = {parseCube, chooseIsovalue, isosurface, inferBonds, downsample,
+                    weld, smoothMesh, recomputeNormals,
                     symbolOf, colorOf, radiusOf, BOHR_TO_ANGSTROM};
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {parseCube, chooseIsovalue, isosurface, inferBonds, downsample,
+                    weld, smoothMesh, recomputeNormals,
                     symbolOf, colorOf, radiusOf, BOHR_TO_ANGSTROM};
 }

@@ -195,8 +195,8 @@ async function show() {
 function place(el, w, h) {
   S.el = el; S.natural = [w, h];
   const wrap = $('viewwrap');
-  S.fit = Math.min((wrap.clientWidth - 24) / w, (wrap.clientHeight - 24) / h, 1);
   S.zoom = 1; S.ox = 0; S.oy = 0; S.rot = 0; S.mirror = false;
+  S.fit = computeFit();
   $('view').innerHTML = ''; $('view').appendChild(el);
   applyTransform();
   $('finfo').textContent = `${f_info()} │ ${w} × ${h}`;
@@ -206,25 +206,35 @@ function f_info() {
   return `${f.folder} │ image ${S.ii + 1}/${list.length} │ ${f.type.toUpperCase()}` +
          ` │ ${(f.file.size / 1024).toFixed(0)} KB`;
 }
+function computeFit() {
+  const wrap = $('viewwrap');
+  const swap = S.rot % 2 === 1;              // a quarter turn swaps the footprint
+  const W = swap ? S.natural[1] : S.natural[0];
+  const H = swap ? S.natural[0] : S.natural[1];
+  return Math.min((wrap.clientWidth - 24) / W, (wrap.clientHeight - 24) / H, 1);
+}
+
 function applyTransform() {
   if (!S.el) return;
   const s = S.fit * S.zoom;
   const wrap = $('viewwrap');
-  // A quarter turn swaps the footprint, so fit and centring use the rotated
-  // extent rather than the raw image size.
-  const swap = S.rot % 2 === 1;
-  const w = (swap ? S.natural[1] : S.natural[0]) * s;
-  const h = (swap ? S.natural[0] : S.natural[1]) * s;
-  const x = (wrap.clientWidth - w) / 2 + S.ox, y = (wrap.clientHeight - h) / 2 + S.oy;
-  // Rotate and mirror about the element's own centre, then place it.
+  const W = S.natural[0], H = S.natural[1];
+
+  // Transform about the element's own centre and place that centre where it
+  // belongs. The previous version mixed transform-origin 0 0 with centre-based
+  // translations and then divided the scale back out, which left the content
+  // offset by roughly half a canvas.
+  const cx = wrap.clientWidth / 2 + S.ox;
+  const cy = wrap.clientHeight / 2 + S.oy;
+
+  S.el.style.width = W + 'px';
+  S.el.style.height = H + 'px';
+  S.el.style.transformOrigin = '50% 50%';
   S.el.style.transform =
-    `translate(${x}px,${y}px)` +
-    ` translate(${w / 2}px,${h / 2}px)` +
-    ` rotate(${S.rot * 90}deg) scale(${S.mirror ? -s : s},${s})` +
-    ` translate(${-S.natural[0] * s / 2}px,${-S.natural[1] * s / 2}px)` +
-    ` scale(${1 / s})`;
-  S.el.style.width = S.natural[0] + 'px';
-  S.el.style.height = S.natural[1] + 'px';
+    `translate(${cx - W / 2}px, ${cy - H / 2}px) ` +
+    `rotate(${S.rot * 90}deg) ` +
+    `scale(${S.mirror ? -s : s}, ${s})`;
+
   $('zlbl').textContent = Math.abs(S.zoom - 1) < .001 ? 'Fit' : Math.round(s * 100) + '%';
   const bits = [];
   if (S.rot) bits.push(S.rot * 90 + '°');
@@ -314,6 +324,7 @@ const C3 = {renderer: null, scene: null, camera: null, root: null,
             flat: false, showAtoms: true, showBonds: true,
             elementColors: {},          // {atomicNumber: 0xrrggbb}
             atomScale: 1.0, showH: true, showPos: true, showNeg: true,
+            smooth: 4, bondTol: 0.45,
             homeDist: 0,
             surfaces: [], atomMeshes: [], bondMeshes: []};
 
@@ -427,9 +438,15 @@ function addIsoSurfaces(THREE, root, grid, iso) {
   for (const [level, color] of [[iso, C3.pos], [-iso, C3.neg]]) {
     const surf = CubeLib.isosurface(grid, level);
     if (!surf.positions.length) continue;
+    // Weld first: marching tetrahedra emits unshared vertices, so without
+    // this there is no connectivity to smooth across and the GPU uploads
+    // roughly six times more vertices than it needs.
+    let built = CubeLib.weld(surf.positions, surf.normals);
+    if (C3.smooth > 0) built = CubeLib.smoothMesh(built, C3.smooth);
     const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(surf.positions, 3));
-    geom.setAttribute('normal', new THREE.BufferAttribute(surf.normals, 3));
+    geom.setAttribute('position', new THREE.BufferAttribute(built.positions, 3));
+    geom.setAttribute('normal', new THREE.BufferAttribute(built.normals, 3));
+    geom.setIndex(new THREE.BufferAttribute(built.indices, 1));
     const mat = new THREE.MeshPhongMaterial({
       color, transparent: true, opacity: C3.opacity, shininess: 40,
       side: THREE.DoubleSide, depthWrite: false,  // sane blending of two lobes
@@ -459,7 +476,7 @@ function addMolecule(THREE, root, grid) {
   // than competing with the orbital surface.
   const bondMat = new THREE.MeshPhongMaterial({color: 0x6e6e78, shininess: 25});
   const cyl = new THREE.CylinderGeometry(1, 1, 1, 12);
-  for (const [i, j] of CubeLib.inferBonds(grid.atoms)) {
+  for (const [i, j] of CubeLib.inferBonds(grid.atoms, C3.bondTol)) {
     const a = grid.atoms[i], b = grid.atoms[j];
     const va = new THREE.Vector3(a.x, a.y, a.zc);
     const vb = new THREE.Vector3(b.x, b.y, b.zc);
@@ -554,6 +571,10 @@ function syncPanel() {
   $('cpPosOn').checked = C3.showPos;
   $('cpNegOn').checked = C3.showNeg;
   $('cpH').checked = C3.showH;
+  $('cpSmooth').value = C3.smooth;
+  $('cpSmoothVal').textContent = C3.smooth ? C3.smooth + ' passes' : 'off';
+  $('cpTol').value = Math.round(C3.bondTol * 100);
+  $('cpTolVal').textContent = '+' + C3.bondTol.toFixed(2) + ' A';
   $('cpScale').value = Math.round(C3.atomScale * 100);
   $('cpScaleVal').textContent = Math.round(C3.atomScale * 100) + '%';
   buildElementSwatches();
@@ -690,8 +711,8 @@ async function runExport() {
   const kept = S.files.filter(f => S.state.get(f.path));
   const prog = $('xProg'), status = $('xStatus');
   prog.style.display = 'block'; prog.value = 0;
-  const steps = [$('xZip').checked, $('xPdf').checked,
-                 $('xNotes').checked, $('xList').checked].filter(Boolean).length;
+  const steps = [$('xZip').checked, $('xPdf').checked, $('xPdfEach').checked,
+                 $('xNotes').checked, $('xList').checked].filter(Boolean).length || 1;
   let done = 0;
   const tick = msg => { status.textContent = msg; prog.value = (done / steps) * 100; };
 
@@ -712,6 +733,26 @@ async function runExport() {
     const blob = await zip.generateAsync({type: 'blob', compression: 'STORE'},
       m => { status.textContent = `zipping… ${m.percent.toFixed(0)}%`; });
     download('kept-files.zip', blob);
+    done++;
+  }
+  if ($('xPdfEach').checked) {
+    // One PDF per folder, named after the folder, mirroring the desktop
+    // app's per-folder mode.
+    const byFolder = new Map();
+    for (const f of kept) {
+      if (!NATIVE.has(f.type) && f.type !== 'tga') continue;
+      if (!byFolder.has(f.folder)) byFolder.set(f.folder, []);
+      byFolder.get(f.folder).push(f);
+    }
+    let n = 0;
+    for (const [folder, files] of byFolder) {
+      status.textContent = `PDF for ${folder} (${++n}/${byFolder.size})`;
+      const blob = await buildPdf(files, msg => { status.textContent = msg; });
+      if (blob) {
+        const safe = folder.replace(/[\\/]+/g, '_') || 'root';
+        download(`${safe}.pdf`, blob);
+      }
+    }
     done++;
   }
   if ($('xPdf').checked) {
@@ -738,6 +779,24 @@ async function runExport() {
   }
   prog.value = 100;
   status.textContent = 'Done.';
+}
+
+/** Assemble a list of image files into one PDF blob. */
+async function buildPdf(files, onProgress) {
+  const {PDFDocument} = PDFLib;
+  const pdf = await PDFDocument.create();
+  let added = 0;
+  for (let i = 0; i < files.length; i++) {
+    if (onProgress) onProgress(`${files[i].name} (${i + 1}/${files.length})`);
+    const png = await toPngBytes(files[i]);
+    if (!png) continue;
+    const img = await pdf.embedPng(png);
+    const page = pdf.addPage([img.width, img.height]);
+    page.drawImage(img, {x: 0, y: 0, width: img.width, height: img.height});
+    added++;
+  }
+  if (!added) return null;
+  return new Blob([await pdf.save()], {type: 'application/pdf'});
 }
 
 async function toPngBytes(f) {
@@ -834,17 +893,22 @@ $('isoReset').onclick = () => {
  * commutes with rotation after negating the angle, so a flip after a rotation
  * must invert it too. Toggling the mirror alone would behave erratically once
  * the image had been rotated. */
-function rotate(dir) { S.rot = (S.rot + dir + 4) % 4; applyTransform(); }
+function rotate(dir) {
+  S.rot = (S.rot + dir + 4) % 4;
+  S.fit = computeFit();               // the footprint changed
+  applyTransform();
+}
 function flip(axis) {
   if (axis === 'h') { S.rot = (4 - S.rot) % 4; S.mirror = !S.mirror; }
   else { S.rot = (6 - S.rot) % 4; S.mirror = !S.mirror; }
+  S.fit = computeFit();
   applyTransform();
 }
 $('rotL').onclick = () => rotate(-1);
 $('rotR').onclick = () => rotate(1);
 $('flipH').onclick = () => flip('h');
 $('flipV').onclick = () => flip('v');
-$('rotReset').onclick = () => { S.rot = 0; S.mirror = false; applyTransform(); };
+$('rotReset').onclick = () => { S.rot = 0; S.mirror = false; S.fit = computeFit(); applyTransform(); };
 
 /* Cube settings panel */
 $('isoMore').onclick = () => {
@@ -928,6 +992,42 @@ function refit() {
   });
 }
 
+/* Sidebar resizing. Width is remembered so the layout survives a reload. */
+(function () {
+  const grip = $('grip'), side = $('side');
+  const saved = +localStorage.getItem('vm.sideWidth');
+  if (saved >= 170) side.style.width = saved + 'px';
+  let dragging = false;
+  grip.addEventListener('pointerdown', e => {
+    dragging = true; grip.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = 'none';
+  });
+  grip.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const w = Math.max(170, Math.min(innerWidth * 0.6, e.clientX));
+    side.style.width = w + 'px';
+  });
+  grip.addEventListener('pointerup', e => {
+    dragging = false; document.body.style.userSelect = '';
+    localStorage.setItem('vm.sideWidth', parseInt(side.style.width, 10) || 290);
+    // The viewport changed width, so refit whatever is on screen
+    if (S.el) { S.fit = computeFit(); applyTransform(); }
+    if (C3.grid) refit();
+  });
+})();
+
+/* Surface quality and bonding */
+$('cpSmooth').oninput = e => {
+  C3.smooth = +e.target.value;
+  $('cpSmoothVal').textContent = C3.smooth ? C3.smooth + ' passes' : 'off';
+};
+$('cpSmooth').onchange = () => rebuildIso(C3.iso);
+$('cpTol').oninput = e => {
+  C3.bondTol = +e.target.value / 100;
+  $('cpTolVal').textContent = '+' + C3.bondTol.toFixed(2) + ' A';
+};
+$('cpTol').onchange = () => rebuildMolecule();
+
 /* Fullscreen — requested on the view area so the overlaid isosurface bar,
  * settings panel and zoom controls stay usable. Requesting it on the whole
  * document would keep the sidebar and footer, which defeats the point. */
@@ -953,12 +1053,7 @@ document.addEventListener('fullscreenchange', () => {
       C3.camera.updateProjectionMatrix();
       renderCube();
     }
-    if (S.el) {
-      const [w0, h0] = S.natural, wrap = $('viewwrap');
-      S.fit = Math.min((wrap.clientWidth - 24) / w0,
-                       (wrap.clientHeight - 24) / h0, 1);
-      applyTransform();
-    }
+    if (S.el) { S.fit = computeFit(); applyTransform(); }
   }, 60);
 });
 
@@ -1008,14 +1103,128 @@ $('view').addEventListener('pointermove', e => {
 $('view').addEventListener('pointerup', () => {
   panning = null; C3.drag = null; $('view').classList.remove('drag');
 });
-window.addEventListener('resize', () => { if (S.el) { const [w, h] = S.natural; const wrap = $('viewwrap');
-  S.fit = Math.min((wrap.clientWidth - 24) / w, (wrap.clientHeight - 24) / h, 1); applyTransform(); } });
+window.addEventListener('resize', () => {
+  if (S.el) { S.fit = computeFit(); applyTransform(); }
+});
+
+/* ── Rebindable shortcuts ────────────────────────────────────────────────
+ * Actions are named so the binding can change without touching the handler.
+ * Overrides live in localStorage; defaults fill any gaps, so a partially
+ * customised set still works after new actions are added. */
+const ACTIONS = [
+  ['keep',     'Mark as KEEP',        'k'],
+  ['delete',   'Mark as DELETE',      'd'],
+  ['toggle',   'Toggle keep/delete',  ' '],
+  ['next',     'Next image',          'arrowright'],
+  ['prev',     'Previous image',      'arrowleft'],
+  ['nextFold', 'Next folder',         '.'],
+  ['prevFold', 'Previous folder',     ','],
+  ['note',     'Edit note',           'n'],
+  ['flag',     'Toggle flag',         'f'],
+  ['rotL',     'Rotate left',         '['],
+  ['rotR',     'Rotate right',        ']'],
+  ['flipH',    'Flip horizontal',     'h'],
+  ['flipV',    'Flip vertical',       'v'],
+  ['resetRot', 'Reset orientation',   'r'],
+  ['zoomIn',   'Zoom in',             '='],
+  ['zoomOut',  'Zoom out',            '-'],
+  ['zoomFit',  'Zoom to fit',         '0'],
+  ['iso',      '3D settings',         'i'],
+  ['full',     'Fullscreen',          'f11'],
+];
+const DEFAULT_KEYS = Object.fromEntries(ACTIONS.map(([id, , k]) => [id, k]));
+
+function loadKeys() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('vm.keys') || '{}'); } catch (e) {}
+  return {...DEFAULT_KEYS, ...saved};
+}
+let KEYS = loadKeys();
+const saveKeys = () => localStorage.setItem('vm.keys', JSON.stringify(KEYS));
+
+const HANDLERS = {
+  keep: () => mark(true),
+  delete: () => mark(false),
+  toggle: () => { const f = curFile(); if (f) { S.state.set(f.path, !S.state.get(f.path)); show(); } },
+  next: nextImage, prev: prevImage,
+  nextFold: () => stepFolder(1), prevFold: () => stepFolder(-1),
+  note: () => $('bNote').click(), flag: toggleFlag,
+  rotL: () => rotate(-1), rotR: () => rotate(1),
+  flipH: () => flip('h'), flipV: () => flip('v'),
+  resetRot: () => $('rotReset').click(),
+  zoomIn: () => $('zIn').click(), zoomOut: () => $('zOut').click(),
+  zoomFit: () => $('zFit').click(),
+  iso: () => { if (C3.grid) $('isoMore').click(); },
+  full: toggleFullscreen,
+};
+
+const prettyKey = k => ({' ': 'Space', 'arrowleft': '←', 'arrowright': '→',
+  'arrowup': '↑', 'arrowdown': '↓', 'escape': 'Esc', 'f11': 'F11'}[k] ||
+  (k.length === 1 ? k.toUpperCase() : k));
+
+function buildKeyRows() {
+  const box = $('keyRows'); box.innerHTML = '';
+  for (const [id, label] of ACTIONS) {
+    const row = document.createElement('div');
+    row.className = 'krow';
+    const name = document.createElement('span'); name.textContent = label;
+    const btn = document.createElement('button');
+    btn.className = 'sm kbtn'; btn.textContent = prettyKey(KEYS[id]);
+    btn.onclick = () => startCapture(id, btn);
+    row.append(name, btn); box.appendChild(row);
+  }
+}
+
+let capturing = null;
+function startCapture(id, btn) {
+  if (capturing) capturing.btn.classList.remove('listening');
+  capturing = {id, btn};
+  btn.classList.add('listening');
+  btn.textContent = 'press a key…';
+  $('keyMsg').textContent = 'Press any key, or Esc to cancel.';
+}
+
+$('dKeys').addEventListener('keydown', e => {
+  if (!capturing) return;
+  e.preventDefault(); e.stopPropagation();
+  if (e.key === 'Escape') {
+    capturing.btn.classList.remove('listening');
+    capturing.btn.textContent = prettyKey(KEYS[capturing.id]);
+    capturing = null; $('keyMsg').textContent = 'Cancelled.';
+    return;
+  }
+  const k = e.key === ' ' ? ' ' : e.key.toLowerCase();
+  // Clear whoever held this key, so two actions can never share one binding
+  let stolenFrom = null;
+  for (const [id, v] of Object.entries(KEYS)) {
+    if (v === k && id !== capturing.id) { KEYS[id] = ''; stolenFrom = id; }
+  }
+  KEYS[capturing.id] = k;
+  saveKeys();
+  capturing.btn.classList.remove('listening');
+  capturing = null;
+  buildKeyRows();
+  $('keyMsg').textContent = stolenFrom
+    ? `Taken from "${ACTIONS.find(a => a[0] === stolenFrom)[1]}".` : '';
+});
+
+$('bKeys').onclick = () => { buildKeyRows(); $('keyMsg').textContent = ''; $('dKeys').showModal(); };
+$('keysClose').onclick = () => $('dKeys').close();
+$('keysReset').onclick = () => {
+  KEYS = {...DEFAULT_KEYS}; saveKeys(); buildKeyRows();
+  $('keyMsg').textContent = 'Defaults restored.';
+};
 
 /* Keyboard — ignored while a dialog or text field has focus */
 document.addEventListener('keydown', e => {
   if (document.querySelector('dialog[open]')) return;
   if (/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
-  const k = e.key.toLowerCase();
+  const k = e.key === ' ' ? ' ' : e.key.toLowerCase();
+  for (const [id, bound] of Object.entries(KEYS)) {
+    if (bound && bound === k && HANDLERS[id]) {
+      e.preventDefault(); HANDLERS[id](); return;
+    }
+  }
   const map = {
     k: () => mark(true), d: () => mark(false),
     ' ': () => { const f = curFile(); if (f) { S.state.set(f.path, !S.state.get(f.path)); show(); } },
@@ -1030,7 +1239,6 @@ document.addEventListener('keydown', e => {
     '=': () => $('zIn').click(), '+': () => $('zIn').click(),
     '-': () => $('zOut').click(), '0': () => $('zFit').click(),
   };
-  if (e.key === 'F11') { e.preventDefault(); toggleFullscreen(); return; }
   if (e.key === 'Escape' && document.fullscreenElement) return;  // browser handles
   const fn = map[k === ' ' ? ' ' : k];
   if (fn) { e.preventDefault(); fn(); }
