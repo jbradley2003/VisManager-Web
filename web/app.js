@@ -33,7 +33,7 @@ const S = {
   enabled: new Set(Object.keys(TYPES)),
   collapsed: new Set(),
   fi: 0, ii: 0,       // folder index, image index
-  zoom: 1, fit: 1, ox: 0, oy: 0,
+  zoom: 1, fit: 1, ox: 0, oy: 0, rot: 0, mirror: false,
   url: null, el: null, natural: [0, 0],
   rootName: ''
 };
@@ -196,7 +196,7 @@ function place(el, w, h) {
   S.el = el; S.natural = [w, h];
   const wrap = $('viewwrap');
   S.fit = Math.min((wrap.clientWidth - 24) / w, (wrap.clientHeight - 24) / h, 1);
-  S.zoom = 1; S.ox = 0; S.oy = 0;
+  S.zoom = 1; S.ox = 0; S.oy = 0; S.rot = 0; S.mirror = false;
   $('view').innerHTML = ''; $('view').appendChild(el);
   applyTransform();
   $('finfo').textContent = `${f_info()} │ ${w} × ${h}`;
@@ -210,12 +210,26 @@ function applyTransform() {
   if (!S.el) return;
   const s = S.fit * S.zoom;
   const wrap = $('viewwrap');
-  const w = S.natural[0] * s, h = S.natural[1] * s;
+  // A quarter turn swaps the footprint, so fit and centring use the rotated
+  // extent rather than the raw image size.
+  const swap = S.rot % 2 === 1;
+  const w = (swap ? S.natural[1] : S.natural[0]) * s;
+  const h = (swap ? S.natural[0] : S.natural[1]) * s;
   const x = (wrap.clientWidth - w) / 2 + S.ox, y = (wrap.clientHeight - h) / 2 + S.oy;
-  S.el.style.transform = `translate(${x}px,${y}px) scale(${s})`;
+  // Rotate and mirror about the element's own centre, then place it.
+  S.el.style.transform =
+    `translate(${x}px,${y}px)` +
+    ` translate(${w / 2}px,${h / 2}px)` +
+    ` rotate(${S.rot * 90}deg) scale(${S.mirror ? -s : s},${s})` +
+    ` translate(${-S.natural[0] * s / 2}px,${-S.natural[1] * s / 2}px)` +
+    ` scale(${1 / s})`;
   S.el.style.width = S.natural[0] + 'px';
   S.el.style.height = S.natural[1] + 'px';
   $('zlbl').textContent = Math.abs(S.zoom - 1) < .001 ? 'Fit' : Math.round(s * 100) + '%';
+  const bits = [];
+  if (S.rot) bits.push(S.rot * 90 + '°');
+  if (S.mirror) bits.push('⇄');
+  $('rotLbl').textContent = bits.length ? bits.join(' ') : '—';
 }
 
 function showImage(f) {
@@ -294,7 +308,17 @@ async function showTga(f) {
  * molecule. The renderer is created once and reused, because WebGL contexts
  * are a limited resource — browsers drop the oldest after roughly a dozen. */
 const C3 = {renderer: null, scene: null, camera: null, root: null,
-            grid: null, iso: 0, raf: null, drag: null};
+            grid: null, iso: 0, raf: null, drag: null,
+            // Look settings, kept across files so a chosen style sticks
+            opacity: 0.62, pos: 0xf2d140, neg: 0x40bad6, bg: 0x0b0712,
+            flat: false, showAtoms: true, showBonds: true,
+            elementColors: {},          // {atomicNumber: 0xrrggbb}
+            atomScale: 1.0, showH: true, showPos: true, showNeg: true,
+            homeDist: 0,
+            surfaces: [], atomMeshes: [], bondMeshes: []};
+
+const hex = n => '#' + n.toString(16).padStart(6, '0');
+const unhex = s2 => parseInt(s2.slice(1), 16);
 
 async function showCube(f) {
   const three = await loadThree();
@@ -342,7 +366,7 @@ function buildCubeScene(THREE, grid) {
   S.el = null;                       // the 2D pan/zoom path does not apply
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0712);
+  scene.background = new THREE.Color(C3.bg);
   C3.scene = scene;
 
   const root = new THREE.Group();
@@ -360,45 +384,80 @@ function buildCubeScene(THREE, grid) {
   addIsoSurfaces(THREE, root, grid, C3.iso);
   addMolecule(THREE, root, grid);
 
-  // Frame the whole grid
-  const box = new THREE.Box3().setFromObject(root);
-  const size = box.getSize(new THREE.Vector3()).length() || 10;
-  const centre = box.getCenter(new THREE.Vector3());
-  root.position.sub(centre);                  // orbit about the molecule
-
-  const cam = new THREE.PerspectiveCamera(45, w / h, size / 100, size * 10);
-  cam.position.set(0, 0, size * 1.1);
-  C3.camera = cam;
-  C3.dist = size * 1.1;
+  frameScene(THREE, w, h);
   renderCube();
 }
 
+/**
+ * Fit the camera to the bounding sphere of molecule plus isosurface.
+ *
+ * Framing on the grid box leaves the subject small in a sea of empty space,
+ * because a cube's grid is usually much larger than the orbital inside it.
+ * The sphere radius and the vertical field of view give the exact distance
+ * at which the content fills the view.
+ */
+function frameScene(THREE, w, h) {
+  const root = C3.root;
+  root.position.set(0, 0, 0);
+  const box = new THREE.Box3().setFromObject(root);
+  if (box.isEmpty()) return;
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  root.position.sub(sphere.center);           // orbit about the content
+
+  const fov = 45;
+  const fitH = sphere.radius / Math.sin((fov / 2) * Math.PI / 180);
+  const fitW = fitH / Math.min(1, w / h);     // respect a narrow window
+  const dist = Math.max(fitH, fitW) * 1.15;   // a little breathing room
+
+  const cam = C3.camera || new THREE.PerspectiveCamera(fov, w / h, 0.01, 1e5);
+  cam.fov = fov;
+  cam.aspect = w / h;
+  cam.near = Math.max(dist / 1000, 0.01);
+  cam.far = dist * 10;
+  cam.position.set(0, 0, dist);
+  cam.lookAt(0, 0, 0);
+  cam.updateProjectionMatrix();
+  C3.camera = cam;
+  C3.dist = dist;
+  C3.homeDist = dist;
+}
+
 function addIsoSurfaces(THREE, root, grid, iso) {
-  for (const [level, color] of [[iso, 0xf2d140], [-iso, 0x40bad6]]) {
+  C3.surfaces = [];
+  for (const [level, color] of [[iso, C3.pos], [-iso, C3.neg]]) {
     const surf = CubeLib.isosurface(grid, level);
     if (!surf.positions.length) continue;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(surf.positions, 3));
     geom.setAttribute('normal', new THREE.BufferAttribute(surf.normals, 3));
     const mat = new THREE.MeshPhongMaterial({
-      color, transparent: true, opacity: 0.62, shininess: 40,
-      side: THREE.DoubleSide, depthWrite: false   // sane blending of two lobes
+      color, transparent: true, opacity: C3.opacity, shininess: 40,
+      side: THREE.DoubleSide, depthWrite: false,  // sane blending of two lobes
+      flatShading: C3.flat
     });
-    root.add(new THREE.Mesh(geom, mat));
+    const mesh = new THREE.Mesh(geom, mat);
+    root.add(mesh);
+    C3.surfaces.push(mesh);
   }
 }
 
 function addMolecule(THREE, root, grid) {
+  C3.atomMeshes = []; C3.bondMeshes = [];
   const sphere = new THREE.SphereGeometry(1, 20, 14);
   for (const a of grid.atoms) {
     const m = new THREE.Mesh(sphere, new THREE.MeshPhongMaterial({
-      color: CubeLib.colorOf(a.z), shininess: 60}));
-    const r = CubeLib.radiusOf(a.z) * 0.32;
+      color: C3.elementColors[a.z] ?? CubeLib.colorOf(a.z), shininess: 60}));
+    m.userData.z = a.z;
+    m.visible = C3.showAtoms && (a.z !== 1 || C3.showH);
+    C3.atomMeshes.push(m);
+    const r = CubeLib.radiusOf(a.z) * 0.42 * C3.atomScale;
     m.scale.setScalar(r);
     m.position.set(a.x, a.y, a.zc);
     root.add(m);
   }
-  const bondMat = new THREE.MeshPhongMaterial({color: 0xcccccc, shininess: 40});
+  // Thinner and darker than the atoms, so bonds read as structure rather
+  // than competing with the orbital surface.
+  const bondMat = new THREE.MeshPhongMaterial({color: 0x6e6e78, shininess: 25});
   const cyl = new THREE.CylinderGeometry(1, 1, 1, 12);
   for (const [i, j] of CubeLib.inferBonds(grid.atoms)) {
     const a = grid.atoms[i], b = grid.atoms[j];
@@ -407,8 +466,11 @@ function addMolecule(THREE, root, grid) {
     const mid = va.clone().add(vb).multiplyScalar(0.5);
     const dir = vb.clone().sub(va);
     const m = new THREE.Mesh(cyl, bondMat);
+    m.visible = C3.showBonds && C3.showAtoms;
+    C3.bondMeshes.push(m);
     m.position.copy(mid);
-    m.scale.set(0.09, dir.length(), 0.09);
+    const br = 0.075 * C3.atomScale;
+    m.scale.set(br, dir.length(), br);
     // The cylinder runs along +Y by default; aim it down the bond
     m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
     root.add(m);
@@ -432,20 +494,108 @@ function rebuildIso(newIso) {
       }
     }
     addIsoSurfaces(THREE, C3.root, C3.grid, newIso);
-    $('isoLbl').textContent = '±' + (newIso >= 0.001
-      ? newIso.toFixed(4) : newIso.toExponential(2));
+    $('isoLbl').textContent = isoLabel(newIso);
+    $('cpIsoVal').textContent = isoLabel(newIso);
     renderCube();
   });
 }
 
+function restyle() {
+  for (let i = 0; i < C3.surfaces.length; i++) {
+    C3.surfaces[i].visible = i === 0 ? C3.showPos : C3.showNeg;
+    const m = C3.surfaces[i].material;
+    m.color.setHex(i === 0 ? C3.pos : C3.neg);
+    m.opacity = C3.opacity;
+    m.flatShading = C3.flat;
+    m.needsUpdate = true;
+  }
+  for (const m of C3.atomMeshes) {
+    m.visible = C3.showAtoms && (m.userData.z !== 1 || C3.showH);
+    m.material.color.setHex(C3.elementColors[m.userData.z] ??
+                            CubeLib.colorOf(m.userData.z));
+  }
+  for (const m of C3.bondMeshes) m.visible = C3.showBonds && C3.showAtoms;
+  if (C3.scene) C3.scene.background.setHex(C3.bg);
+  renderCube();
+}
+
+function buildElementSwatches() {
+  const box = $('cpElements');
+  box.innerHTML = '';
+  if (!C3.grid) return;
+  const present = [...new Set(C3.grid.atoms.map(a => a.z))].sort((a, b) => a - b);
+  for (const z of present) {
+    const cell = document.createElement('div');
+    cell.className = 'cp-el';
+    const label = document.createElement('b');
+    label.textContent = CubeLib.symbolOf(z);
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = hex(C3.elementColors[z] ?? CubeLib.colorOf(z));
+    input.oninput = () => { C3.elementColors[z] = unhex(input.value); restyle(); };
+    cell.append(label, input);
+    box.appendChild(cell);
+  }
+}
+
+function syncPanel() {
+  if (!C3.grid) return;
+  const peak = Math.max(Math.abs(C3.grid.range[0]), Math.abs(C3.grid.range[1]));
+  $('cpIso').value = isoToSlider(C3.iso, peak);
+  $('cpIsoVal').textContent = isoLabel(C3.iso);
+  $('cpOp').value = Math.round(C3.opacity * 100);
+  $('cpOpVal').textContent = Math.round(C3.opacity * 100) + '%';
+  $('cpPos').value = hex(C3.pos);
+  $('cpNeg').value = hex(C3.neg);
+  $('cpBg').value = hex(C3.bg);
+  $('cpFlat').checked = C3.flat;
+  $('cpAtoms').checked = C3.showAtoms;
+  $('cpBonds').checked = C3.showBonds;
+  $('cpPosOn').checked = C3.showPos;
+  $('cpNegOn').checked = C3.showNeg;
+  $('cpH').checked = C3.showH;
+  $('cpScale').value = Math.round(C3.atomScale * 100);
+  $('cpScaleVal').textContent = Math.round(C3.atomScale * 100) + '%';
+  buildElementSwatches();
+}
+
+/* Cube amplitudes span orders of magnitude, so a linear slider spends most
+ * of its travel in a range where nothing changes. Map the slider
+ * geometrically between 0.05% and 90% of the peak instead, and show the
+ * value as a percentage of the peak so it means the same thing across files
+ * with completely different amplitudes. */
+const ISO_MIN_FRAC = 0.0005, ISO_MAX_FRAC = 0.9;
+function sliderToIso(v, peak) {
+  const t = v / 1000;
+  const frac = ISO_MIN_FRAC * Math.pow(ISO_MAX_FRAC / ISO_MIN_FRAC, t);
+  return frac * peak;
+}
+function isoToSlider(iso, peak) {
+  const frac = Math.min(ISO_MAX_FRAC, Math.max(ISO_MIN_FRAC, iso / peak));
+  return Math.round(1000 * Math.log(frac / ISO_MIN_FRAC) /
+                    Math.log(ISO_MAX_FRAC / ISO_MIN_FRAC));
+}
+function isoLabel(iso) {
+  const peak = C3.peak || 1;
+  const pct = (iso / peak) * 100;
+  const num = iso >= 1e-3 ? iso.toFixed(4) : iso.toExponential(2);
+  return `±${num}  (${pct < 1 ? pct.toFixed(2) : pct.toFixed(1)}%)`;
+}
+
 function showIsoControls(on) {
   $('isobar').style.display = on ? 'flex' : 'none';
+  // The 2D zoom controls are meaningless for a 3D scene
+  $('zoombar').style.display = on ? 'none' : 'flex';
+  $('imgbar').style.display = on ? 'none' : 'flex';
   if (on && C3.grid) {
-    const peak = Math.max(Math.abs(C3.grid.range[0]), Math.abs(C3.grid.range[1]));
+    C3.peak = Math.max(Math.abs(C3.grid.range[0]), Math.abs(C3.grid.range[1]));
     const sl = $('isoSlide');
     sl.min = 0; sl.max = 1000;
-    sl.value = Math.round(C3.iso / (peak * 0.9) * 1000);
-    $('isoLbl').textContent = '±' + C3.iso.toFixed(4);
+    sl.value = isoToSlider(C3.iso, C3.peak);
+    $('isoLbl').textContent = isoLabel(C3.iso);
+    syncPanel();
+  } else {
+    $('cubePanel').classList.remove('on');
   }
 }
 
@@ -664,9 +814,10 @@ $('isoDown').onclick = () => rebuildIso(C3.iso / 1.35);
 let isoTimer = null;
 $('isoSlide').oninput = e => {
   if (!C3.grid) return;
-  const peak = Math.max(Math.abs(C3.grid.range[0]), Math.abs(C3.grid.range[1]));
-  const target = Math.max(peak * 1e-4, (+e.target.value / 1000) * peak * 0.9);
-  $('isoLbl').textContent = '±' + target.toFixed(4);
+  const target = sliderToIso(+e.target.value, C3.peak);
+  $('isoLbl').textContent = isoLabel(target);
+  $('cpIsoVal').textContent = isoLabel(target);
+  $('cpIso').value = e.target.value;
   // Re-extraction costs hundreds of milliseconds, so wait for the drag to
   // settle rather than rebuilding on every step.
   clearTimeout(isoTimer);
@@ -677,6 +828,139 @@ $('isoReset').onclick = () => {
   C3.root.rotation.set(0, 0, 0);
   renderCube();
 };
+
+/* 2D rotate / flip.
+ * Flips are composed the same way as in the desktop build: mirroring only
+ * commutes with rotation after negating the angle, so a flip after a rotation
+ * must invert it too. Toggling the mirror alone would behave erratically once
+ * the image had been rotated. */
+function rotate(dir) { S.rot = (S.rot + dir + 4) % 4; applyTransform(); }
+function flip(axis) {
+  if (axis === 'h') { S.rot = (4 - S.rot) % 4; S.mirror = !S.mirror; }
+  else { S.rot = (6 - S.rot) % 4; S.mirror = !S.mirror; }
+  applyTransform();
+}
+$('rotL').onclick = () => rotate(-1);
+$('rotR').onclick = () => rotate(1);
+$('flipH').onclick = () => flip('h');
+$('flipV').onclick = () => flip('v');
+$('rotReset').onclick = () => { S.rot = 0; S.mirror = false; applyTransform(); };
+
+/* Cube settings panel */
+$('isoMore').onclick = () => {
+  $('cubePanel').classList.toggle('on');
+  if ($('cubePanel').classList.contains('on')) syncPanel();
+};
+$('cpClose').onclick = () => $('cubePanel').classList.remove('on');
+
+let cpIsoTimer = null;
+$('cpIso').oninput = e => {
+  if (!C3.grid) return;
+  const target = sliderToIso(+e.target.value, C3.peak);
+  $('cpIsoVal').textContent = isoLabel(target);
+  $('isoLbl').textContent = isoLabel(target);
+  $('isoSlide').value = e.target.value;
+  clearTimeout(cpIsoTimer);
+  cpIsoTimer = setTimeout(() => rebuildIso(target), 180);
+};
+$('cpOp').oninput = e => {
+  C3.opacity = +e.target.value / 100;
+  $('cpOpVal').textContent = e.target.value + '%';
+  restyle();                       // no re-extraction needed for a material
+};
+$('cpPos').oninput = e => { C3.pos = unhex(e.target.value); restyle(); };
+$('cpNeg').oninput = e => { C3.neg = unhex(e.target.value); restyle(); };
+$('cpBg').oninput = e => { C3.bg = unhex(e.target.value); restyle(); };
+$('cpFlat').onchange = e => { C3.flat = e.target.checked; restyle(); };
+$('cpPosOn').onchange = e => { C3.showPos = e.target.checked; restyle(); };
+$('cpNegOn').onchange = e => { C3.showNeg = e.target.checked; restyle(); };
+$('cpH').onchange = e => { C3.showH = e.target.checked; restyle(); };
+$('cpScale').oninput = e => {
+  C3.atomScale = +e.target.value / 100;
+  $('cpScaleVal').textContent = e.target.value + '%';
+  rebuildMolecule();
+};
+$('cpBgDark').onclick = () => { C3.bg = 0x0b0712; $('cpBg').value = hex(C3.bg); restyle(); };
+$('cpBgWhite').onclick = () => { C3.bg = 0xffffff; $('cpBg').value = hex(C3.bg); restyle(); };
+$('cpFront').onclick = () => setView(0, 0);
+$('cpSide').onclick  = () => setView(Math.PI / 2, 0);
+$('cpTop').onclick   = () => setView(0, -Math.PI / 2);
+$('cpFit').onclick   = () => refit();
+$('cpAtoms').onchange = e => { C3.showAtoms = e.target.checked; restyle(); };
+$('cpBonds').onchange = e => { C3.showBonds = e.target.checked; restyle(); };
+$('cpReset').onclick = () => {
+  Object.assign(C3, {opacity: 0.62, pos: 0xf2d140, neg: 0x40bad6,
+                     bg: 0x0b0712, flat: false, showAtoms: true,
+                     showBonds: true, elementColors: {}, atomScale: 1.0,
+                     showH: true, showPos: true, showNeg: true});
+  rebuildMolecule(); refit();
+  if (C3.grid) rebuildIso(CubeLib.chooseIsovalue(C3.grid.values));
+  restyle(); syncPanel();
+};
+
+/* Atom scale changes geometry, so the molecule is rebuilt rather than
+ * restyled; the isosurface is untouched and needs no re-extraction. */
+function rebuildMolecule() {
+  if (!C3.root) return;
+  loadThree().then(THREE => {
+    if (!THREE) return;
+    for (const m of [...C3.atomMeshes, ...C3.bondMeshes]) {
+      m.geometry.dispose(); m.material.dispose(); C3.root.remove(m);
+    }
+    addMolecule(THREE, C3.root, C3.grid);
+    renderCube();
+  });
+}
+
+function setView(yaw, pitch) {
+  if (!C3.root) return;
+  C3.root.rotation.set(pitch, yaw, 0);
+  renderCube();
+}
+
+function refit() {
+  if (!C3.root) return;
+  loadThree().then(THREE => {
+    if (!THREE) return;
+    const wrap = $('viewwrap');
+    frameScene(THREE, wrap.clientWidth, wrap.clientHeight);
+    renderCube();
+  });
+}
+
+/* Fullscreen — requested on the view area so the overlaid isosurface bar,
+ * settings panel and zoom controls stay usable. Requesting it on the whole
+ * document would keep the sidebar and footer, which defeats the point. */
+function toggleFullscreen() {
+  const el = $('viewwrap');
+  if (!document.fullscreenElement) {
+    (el.requestFullscreen || el.webkitRequestFullscreen).call(el)
+      .catch(err => alert('Fullscreen refused: ' + err.message));
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  }
+}
+$('zFull').onclick = toggleFullscreen;
+document.addEventListener('fullscreenchange', () => {
+  const on = !!document.fullscreenElement;
+  $('zFull').textContent = on ? '⤡' : '⛶';
+  // The canvas has a fixed pixel size, so it must be resized to the new box
+  setTimeout(() => {
+    if (C3.renderer && C3.camera) {
+      const w = $('viewwrap').clientWidth, h = $('viewwrap').clientHeight;
+      C3.renderer.setSize(w, h, false);
+      C3.camera.aspect = w / h;
+      C3.camera.updateProjectionMatrix();
+      renderCube();
+    }
+    if (S.el) {
+      const [w0, h0] = S.natural, wrap = $('viewwrap');
+      S.fit = Math.min((wrap.clientWidth - 24) / w0,
+                       (wrap.clientHeight - 24) / h0, 1);
+      applyTransform();
+    }
+  }, 60);
+});
 
 /* Zoom and pan */
 $('zIn').onclick = () => { S.zoom *= 1.25; applyTransform(); };
@@ -738,9 +1022,16 @@ document.addEventListener('keydown', e => {
     arrowright: nextImage, arrowleft: prevImage,
     '.': () => stepFolder(1), ',': () => stepFolder(-1),
     n: () => $('bNote').click(), f: toggleFlag,
+    i: () => { if (C3.grid) $('isoMore').click(); },
+    '[': () => rotate(-1), ']': () => rotate(1),
+    h: () => flip('h'), v: () => flip('v'),
+    r: () => $('rotReset').click(),
+    f11: () => toggleFullscreen(),
     '=': () => $('zIn').click(), '+': () => $('zIn').click(),
     '-': () => $('zOut').click(), '0': () => $('zFit').click(),
   };
+  if (e.key === 'F11') { e.preventDefault(); toggleFullscreen(); return; }
+  if (e.key === 'Escape' && document.fullscreenElement) return;  // browser handles
   const fn = map[k === ' ' ? ' ' : k];
   if (fn) { e.preventDefault(); fn(); }
 });

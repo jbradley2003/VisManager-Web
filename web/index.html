@@ -84,15 +84,42 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
 #bar{height:3px;background:var(--border);margin:6px 14px 0;border-radius:2px}
 #bar div{height:100%;background:var(--keep-hi);border-radius:2px;width:0}
 #viewwrap{flex:1;position:relative;overflow:hidden;background:var(--keep-bg)}
-#view{position:absolute;inset:0;display:flex;align-items:center;
-  justify-content:center;cursor:grab}
+/* No flex centering here. applyTransform() already positions the element,
+   and centering it twice pushed every image off-screen — which is why
+   nothing appeared for images or PDFs. */
+#view{position:absolute;inset:0;cursor:grab}
 #view.drag{cursor:grabbing}
-#view img,#view canvas{max-width:none;transform-origin:0 0;user-select:none;
-  -webkit-user-drag:none}
-#placeholder{color:var(--muted);text-align:center;padding:30px;max-width:620px}
+#view img,#view canvas{position:absolute;left:0;top:0;max-width:none;
+  transform-origin:0 0;user-select:none;-webkit-user-drag:none}
+#placeholder{position:absolute;left:50%;top:50%;
+  transform:translate(-50%,-50%);width:80%}
+#placeholder{color:var(--muted);text-align:center;padding:30px}
 #placeholder b{display:block;font-size:36px;color:#6b6b8c;margin-bottom:10px}
 #zoombar{position:absolute;top:8px;right:10px;display:flex;gap:6px;
   background:rgba(30,30,46,.85);padding:6px;border-radius:10px}
+#imgbar{position:absolute;top:8px;left:10px;display:none;gap:6px;
+  align-items:center;background:rgba(30,30,46,.88);padding:6px 10px;
+  border-radius:10px}
+#rotLbl{min-width:56px;text-align:center;font-size:12px;font-weight:700;
+  color:var(--flag-text)}
+#cubePanel{position:absolute;top:52px;left:10px;width:290px;display:none;
+  background:rgba(26,26,40,.96);border:1px solid var(--border);
+  border-radius:12px;z-index:20;font-size:12px}
+#cubePanel.on{display:block}
+.cp-head{display:flex;align-items:center;justify-content:space-between;
+  padding:9px 12px;border-bottom:1px solid var(--border)}
+.cp-body{padding:10px 12px;max-height:62vh;overflow:auto}
+.cp-body label{display:block;margin:9px 0 3px;color:var(--muted)}
+.cp-body input[type=range]{width:100%}
+.cp-row{display:flex;align-items:center;gap:8px;margin:9px 0;flex-wrap:wrap;
+  color:var(--muted)}
+.cp-row input[type=color]{width:34px;height:24px;border:1px solid var(--border);
+  border-radius:6px;background:none;padding:0;cursor:pointer}
+.cp-check{display:inline-flex!important;align-items:center;gap:4px;margin:0!important}
+.cp-els{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.cp-el{display:flex;flex-direction:column;align-items:center;gap:2px}
+.cp-el b{font-size:11px;color:var(--text)}
+.val{color:var(--flag-text);font-weight:700}
 #isobar{position:absolute;top:8px;left:10px;display:none;gap:8px;
   align-items:center;background:rgba(30,30,46,.88);padding:6px 10px;
   border-radius:10px}
@@ -108,6 +135,7 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
 #note{text-align:center;font-size:12px;color:var(--flag-text);min-height:17px}
 #acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
 #state{text-align:center;font-weight:700;margin-top:5px}
+#keys{text-align:center;margin-top:6px;font-size:11px;opacity:.75}
 
 dialog{background:var(--bg-dark);color:var(--text);border:1px solid var(--border);
   border-radius:12px;padding:0;max-width:620px;width:92%}
@@ -175,6 +203,59 @@ progress{width:100%;height:8px}
           <button class="sm" id="isoUp">+</button>
           <input type="range" id="isoSlide" min="0" max="1000" value="120">
           <button class="sm" id="isoReset">Recentre</button>
+          <button class="sm teal" id="isoMore">Settings…</button>
+        </div>
+        <div id="cubePanel">
+          <div class="cp-head">
+            <b>Isosurface</b>
+            <button class="sm" id="cpClose">✕</button>
+          </div>
+          <div class="cp-body">
+            <label>Isovalue <span id="cpIsoVal" class="val"></span></label>
+            <input type="range" id="cpIso" min="0" max="1000" value="120">
+            <label>Opacity <span id="cpOpVal" class="val"></span></label>
+            <input type="range" id="cpOp" min="5" max="100" value="62">
+            <div class="cp-row">
+              <span>Positive</span><input type="color" id="cpPos" value="#f2d140">
+              <span>Negative</span><input type="color" id="cpNeg" value="#40bad6">
+            </div>
+            <div class="cp-row">
+              <label class="cp-check"><input type="checkbox" id="cpPosOn" checked> Positive lobe</label>
+              <label class="cp-check"><input type="checkbox" id="cpNegOn" checked> Negative lobe</label>
+            </div>
+            <div class="cp-row"><span>Structure</span>
+              <label class="cp-check"><input type="checkbox" id="cpAtoms" checked> atoms</label>
+              <label class="cp-check"><input type="checkbox" id="cpBonds" checked> bonds</label>
+              <label class="cp-check"><input type="checkbox" id="cpH" checked> H</label>
+            </div>
+            <label>Structure scale <span id="cpScaleVal" class="val"></span></label>
+            <input type="range" id="cpScale" min="30" max="250" value="100">
+            <div class="cp-row">
+              <span>Background</span>
+              <button class="sm" id="cpBgDark">Dark</button>
+              <button class="sm" id="cpBgWhite">White</button>
+              <input type="color" id="cpBg" value="#0b0712">
+              <label class="cp-check"><input type="checkbox" id="cpFlat"> Flat</label>
+            </div>
+            <div class="cp-row"><span>View</span>
+              <button class="sm" id="cpFront">Front</button>
+              <button class="sm" id="cpSide">Side</button>
+              <button class="sm" id="cpTop">Top</button>
+              <button class="sm" id="cpFit">Fit</button>
+            </div>
+            <div id="cpElements" class="cp-els"></div>
+            <div class="cp-row" style="justify-content:flex-end">
+              <button class="sm" id="cpReset">Reset</button>
+            </div>
+          </div>
+        </div>
+        <div id="imgbar">
+          <button class="sm" id="rotL" title="Rotate left [ ">⟲</button>
+          <button class="sm" id="rotR" title="Rotate right ]">⟳</button>
+          <button class="sm" id="flipH" title="Flip horizontal H">⇄</button>
+          <button class="sm" id="flipV" title="Flip vertical V">⇅</button>
+          <span id="rotLbl">—</span>
+          <button class="sm" id="rotReset" title="Reset R">Reset</button>
         </div>
         <div id="zoombar">
           <button class="sm" id="zOut">−</button>
@@ -182,6 +263,7 @@ progress{width:100%;height:8px}
           <button class="sm" id="zIn">+</button>
           <button class="sm" id="zFit">Fit</button>
           <button class="sm" id="z1">1:1</button>
+          <button class="sm" id="zFull" title="Fullscreen (F11)">⛶</button>
         </div>
       </div>
       <div id="foot">
@@ -198,6 +280,14 @@ progress{width:100%;height:8px}
           <button id="bNF">Folder ⏭</button>
         </div>
         <div id="state"></div>
+        <div id="keys" class="hint">
+          <kbd>K</kbd> keep <kbd>D</kbd> delete <kbd>Space</kbd> toggle
+          <kbd>N</kbd> note <kbd>F</kbd> flag
+          <kbd>←</kbd><kbd>→</kbd> image <kbd>,</kbd><kbd>.</kbd> folder
+          <kbd>[</kbd><kbd>]</kbd> rotate <kbd>H</kbd><kbd>V</kbd> flip
+          <kbd>=</kbd><kbd>-</kbd> zoom <kbd>0</kbd> fit
+          <kbd>I</kbd> 3D settings <kbd>F11</kbd> fullscreen
+        </div>
         <div id="note"></div>
       </div>
     </div>

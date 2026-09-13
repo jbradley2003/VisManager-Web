@@ -47,6 +47,21 @@ PNG, JPEG, GIF, WebP, BMP and ICO render natively. PDF previews through
 pdf.js. TGA is decoded in-page by a small built-in decoder (uncompressed and
 RLE truecolour, plus greyscale). TIFF and DDS are listed and markable but not previewed.
 
+**Cube files render in 3D** with a full control panel — isovalue, opacity,
+lobe colours, per-element atom colours, structure scale, hydrogen and bond
+toggles, background presets, and Front/Side/Top view buttons. Press `I` or
+**Settings…**, and `F11` for fullscreen (the controls stay on screen, because
+fullscreen is requested on the view area rather than the document).
+
+The isovalue slider is **logarithmic** and reads as a percentage of the peak.
+Cube amplitudes span orders of magnitude, so a linear slider spends most of
+its travel where nothing changes; the log mapping gives even resolution from
+0.05% to 90% of the peak and means the same thing across files with completely
+different amplitudes.
+
+Camera framing comes from the bounding sphere of molecule plus isosurface, so
+the subject fills the view instead of floating in empty space.
+
 **Cube files render in 3D.** Isosurfaces are extracted in-page and drawn with
 three.js, with a ball-and-stick molecule alongside. Drag to orbit, scroll to
 zoom, and use the isosurface bar to change the level.

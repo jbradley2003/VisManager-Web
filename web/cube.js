@@ -249,9 +249,12 @@ const SYMBOLS = ['n', 'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne',
 
 // CPK-ish colours for the common elements; anything else falls back to grey.
 const ELEMENT_COLOR = {
-  1: 0xffffff, 6: 0x909090, 7: 0x3050f8, 8: 0xff0d0d, 9: 0x90e050,
-  15: 0xff8000, 16: 0xffff30, 17: 0x1ff01f, 35: 0xa62929, 53: 0x940094,
-  5: 0xffb5b5, 14: 0xf0c8a0, 26: 0xe06633, 29: 0xc88033, 30: 0x7d80b0
+  1: 0xe8e8e8,   // H  light grey
+  6: 0x5a4632,   // C  dark brown — reads better against yellow lobes than
+                 //    the usual mid-grey, which competes with the surface
+  7: 0x2f5fd0, 8: 0xd42222, 9: 0x4fbf4f, 5: 0xffb5b5, 14: 0xf0c8a0,
+  15: 0xff8000, 16: 0xe8d22a, 17: 0x30d030, 35: 0xa62929, 53: 0x940094,
+  26: 0xe06633, 29: 0xc88033, 30: 0x7d80b0, 44: 0x248f8f, 45: 0x0a7d8c
 };
 // Covalent radii in Angstrom, used for both atom size and bond detection.
 const COVALENT = {
@@ -270,15 +273,30 @@ const radiusOf = z => COVALENT[z] ?? 0.9;
  * guessed. The usual rule — within 45% of the summed covalent radii — is what
  * VMD and VESTA effectively use.
  */
-function inferBonds(atoms, tolerance = 0.45) {
-  const bonds = [];
+function inferBonds(atoms, tolerance = 0.30) {
+  const candidates = [];
   for (let i = 0; i < atoms.length; i++) {
     for (let j = i + 1; j < atoms.length; j++) {
       const a = atoms[i], b = atoms[j];
+      // Hydrogen bonds to exactly one heavy atom; allowing H-H produces a
+      // web of spurious bonds through the middle of crowded structures.
+      if (a.z === 1 && b.z === 1) continue;
       const d = Math.hypot(a.x - b.x, a.y - b.y, a.zc - b.zc);
       const limit = (radiusOf(a.z) + radiusOf(b.z)) * (1 + tolerance);
-      if (d > 0.1 && d <= limit) bonds.push([i, j]);
+      if (d > 0.4 && d <= limit) candidates.push({i, j, d});
     }
+  }
+  // Shortest first, so when an atom hits its valence cap the bonds it keeps
+  // are the physically plausible ones.
+  candidates.sort((p, q) => p.d - q.d);
+  const MAXB = {1: 1, 8: 2, 7: 4, 6: 4};
+  const used = new Array(atoms.length).fill(0);
+  const bonds = [];
+  for (const c of candidates) {
+    const ca = MAXB[atoms[c.i].z] ?? 6, cb = MAXB[atoms[c.j].z] ?? 6;
+    if (used[c.i] >= ca || used[c.j] >= cb) continue;
+    used[c.i]++; used[c.j]++;
+    bonds.push([c.i, c.j]);
   }
   return bonds;
 }
