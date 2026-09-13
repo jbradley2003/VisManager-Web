@@ -1,0 +1,70 @@
+# VisManager Web
+
+A browser build of the reviewer that works on **copies**. Files are read from
+the folder you pick and never written back, so it needs no special permissions
+and runs in any modern browser — no server, no install.
+
+## Hosting it free
+
+Push this repo to GitHub, then **Settings → Pages → Source: GitHub Actions**.
+`.github/workflows/deploy-web.yml` publishes the `web/` folder on every push to
+`main`. The site appears at `https://<user>.github.io/<repo>/`.
+
+To try it locally first:
+
+```bash
+cd web && python3 -m http.server 8000
+# then open http://localhost:8000
+```
+
+Opening `index.html` directly with `file://` will not work — the CDN scripts
+and object URLs need a real origin.
+
+## What it does
+
+Pick or drag a folder, review with the same shortcuts as the desktop app, then
+export:
+
+| Output | Contents |
+|---|---|
+| `kept-files.zip` | every file you kept, original folder structure preserved |
+| `kept-images.pdf` | the kept raster images as one PDF |
+| `vismanager-notes.txt` | flagged files and their notes, grouped by folder |
+| `delete-list.txt` | the paths you marked for deletion, with commands to act on them |
+
+Nothing on your disk changes. If you want to prune the originals, run the
+delete list yourself — it ships with the exact command for macOS, Linux and
+PowerShell.
+
+## Shortcuts
+
+`K` keep · `D` delete · `Space` toggle · `N` note · `F` flag ·
+`←` `→` images · `,` `.` folders · `=` `-` zoom · `0` fit
+
+## Format support
+
+PNG, JPEG, GIF, WebP, BMP and ICO render natively. PDF previews through
+pdf.js. TGA is decoded in-page by a small built-in decoder (uncompressed and
+RLE truecolour, plus greyscale). TIFF and DDS are listed and markable but not previewed.
+
+**Cube files render in 3D.** Isosurfaces are extracted in-page and drawn with
+three.js, with a ball-and-stick molecule alongside. Drag to orbit, scroll to
+zoom, and use the isosurface bar to change the level.
+
+Two implementation notes. The surface uses marching *tetrahedra* rather than
+marching cubes: it needs no 256-entry lookup table, so there is nothing to
+mistype, and it is watertight. Validated against an analytic sphere — vertices
+land within 0.01 A of the true radius and the triangulated area comes to 99.5%
+of the exact value.
+
+Large grids are strided down before extraction. Production cubes are often
+300 cubed (27 million points), which would take tens of seconds in JavaScript;
+at 1/4 resolution a full orbital extracts in about 0.75 s with no visible loss
+in the isosurface, and the physical extent is unchanged.
+
+## Memory
+
+`File` objects stay backed by the file on disk, so loading several hundred
+files costs almost nothing; only the image currently on screen is decoded.
+The ZIP export is the one memory-hungry step, since it assembles the archive
+in memory before download.

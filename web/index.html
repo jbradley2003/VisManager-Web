@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisManager Web</title>
+<!--
+  VisManager Web — a browser port of the desktop reviewer.
+
+  Works on COPIES. Files are read from the folder you pick and never written
+  back, which is what lets this run as a plain static page in any browser
+  instead of needing the Chromium-only File System Access API.
+
+  You review as usual, then export: a ZIP of the files you kept, a combined
+  PDF, a notes report, and a delete-list you can run locally to prune the
+  originals if you want to.
+
+  No build step and no framework — drop this folder on GitHub Pages as-is.
+-->
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<style>
+:root{
+  --bg-dark:#1e1e2e; --bg-mid:#2a2a3e; --bg-side:#252538; --border:#3a3a55;
+  --text:#e8e8f8; --muted:#9090b8;
+  --keep:#15803d; --keep-hi:#16a34a; --del:#b91c1c; --del-hi:#dc2626;
+  --nav:#3a4e72; --nav-hi:#4a6090; --accent:#4f8ef7; --flag:#b45309;
+  --flag-text:#fbbf24; --violet:#6d28d9; --teal:#0e7490;
+  --keep-bg:#0a2818; --del-bg:#280a10;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg-dark);color:var(--text);
+  font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  overflow:hidden}
+button{font:inherit;font-weight:700;border:0;border-radius:9px;padding:9px 15px;
+  background:var(--nav);color:#fff;cursor:pointer;display:inline-flex;
+  align-items:center;gap:7px;white-space:nowrap}
+button:hover:not(:disabled){background:var(--nav-hi)}
+button:disabled{opacity:.45;cursor:default}
+button.keep{background:var(--keep)} button.keep:hover{background:var(--keep-hi)}
+button.del{background:var(--del)} button.del:hover{background:var(--del-hi)}
+button.flag{background:var(--flag)}
+button.primary{background:var(--violet)} button.primary:hover{background:#7c3aed}
+button.teal{background:var(--teal)} button.teal:hover{background:#0891b2}
+button.sm{padding:5px 10px;font-size:12px;border-radius:7px}
+kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
+  font:11px monospace;margin-left:4px}
+
+#app{display:flex;flex-direction:column;height:100%}
+#toolbar{display:flex;align-items:center;gap:10px;padding:8px 14px;
+  background:var(--bg-mid);flex-wrap:wrap}
+#brand{font-size:17px;font-weight:800;letter-spacing:-.3px}
+#brand span{color:var(--accent)}
+#stats{margin-left:auto;display:flex;gap:14px;align-items:center;font-weight:700}
+.s-keep{color:var(--keep-hi)} .s-del{color:var(--del-hi)}
+.s-flag{color:var(--flag-text)} .s-tot{color:var(--muted);font-weight:400}
+
+#main{flex:1;display:flex;min-height:0}
+#side{width:290px;background:var(--bg-side);display:flex;flex-direction:column;
+  border-right:1px solid var(--border);flex-shrink:0}
+#side h3{margin:12px 10px 6px;font-size:11px;letter-spacing:.08em;
+  color:var(--muted);text-transform:uppercase}
+#tree{flex:1;overflow:auto;padding:0 6px}
+.grp{color:var(--accent);font-weight:700;cursor:pointer;padding:5px 6px;
+  border-radius:6px;font-size:12px;user-select:none}
+.grp:hover{background:rgba(255,255,255,.05)}
+.fld{padding:4px 6px 4px 20px;border-radius:6px;cursor:pointer;font-size:12px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld:hover{background:rgba(255,255,255,.05)}
+.fld.on{background:var(--accent);color:#fff}
+#types{padding:6px 10px 10px;border-top:1px solid var(--border)}
+.chip{display:inline-flex;gap:5px;align-items:center;background:#2f4858;
+  border-radius:6px;padding:4px 9px;margin:3px 3px 0 0;font-size:12px;
+  cursor:pointer;user-select:none}
+.chip.off{background:#33333f;color:var(--muted)}
+#bulk{padding:8px 10px;border-top:1px solid var(--border);display:flex;
+  flex-direction:column;gap:6px}
+
+#stage{flex:1;display:flex;flex-direction:column;min-width:0}
+#head{text-align:center;padding:6px}
+#count{font-size:19px;font-weight:800;color:var(--keep-hi)}
+#ctx{font-size:12px;color:var(--muted)}
+#bar{height:3px;background:var(--border);margin:6px 14px 0;border-radius:2px}
+#bar div{height:100%;background:var(--keep-hi);border-radius:2px;width:0}
+#viewwrap{flex:1;position:relative;overflow:hidden;background:var(--keep-bg)}
+#view{position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;cursor:grab}
+#view.drag{cursor:grabbing}
+#view img,#view canvas{max-width:none;transform-origin:0 0;user-select:none;
+  -webkit-user-drag:none}
+#placeholder{color:var(--muted);text-align:center;padding:30px;max-width:620px}
+#placeholder b{display:block;font-size:36px;color:#6b6b8c;margin-bottom:10px}
+#zoombar{position:absolute;top:8px;right:10px;display:flex;gap:6px;
+  background:rgba(30,30,46,.85);padding:6px;border-radius:10px}
+#isobar{position:absolute;top:8px;left:10px;display:none;gap:8px;
+  align-items:center;background:rgba(30,30,46,.88);padding:6px 10px;
+  border-radius:10px}
+#isoLbl{min-width:74px;text-align:center;font-weight:700;font-size:12px;
+  color:var(--flag-text)}
+#isoSlide{width:130px}
+#zlbl{min-width:52px;text-align:center;align-self:center;font-weight:700;
+  font-size:12px;color:var(--flag-text)}
+
+#foot{background:var(--bg-mid);padding:8px 14px}
+#fname{text-align:center;font-weight:700}
+#finfo{text-align:center;font-size:12px;color:var(--muted)}
+#note{text-align:center;font-size:12px;color:var(--flag-text);min-height:17px}
+#acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
+#state{text-align:center;font-weight:700;margin-top:5px}
+
+dialog{background:var(--bg-dark);color:var(--text);border:1px solid var(--border);
+  border-radius:12px;padding:0;max-width:620px;width:92%}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog h2{margin:0;padding:14px 20px;background:var(--bg-mid);font-size:17px}
+.dbody{padding:18px 20px;max-height:60vh;overflow:auto}
+.dfoot{padding:12px 20px;background:var(--bg-mid);display:flex;gap:8px;
+  justify-content:flex-end}
+textarea{width:100%;min-height:120px;background:var(--bg-mid);color:var(--text);
+  border:1px solid var(--border);border-radius:8px;padding:9px;font:inherit;
+  resize:vertical}
+#drop{position:fixed;inset:0;background:rgba(79,142,247,.18);
+  border:3px dashed var(--accent);display:none;align-items:center;
+  justify-content:center;font-size:26px;font-weight:800;z-index:50}
+#drop.on{display:flex}
+.row{display:flex;gap:10px;align-items:center;margin:8px 0}
+.hint{color:var(--muted);font-size:12px}
+progress{width:100%;height:8px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <div id="brand"><span>Vis</span>Manager <span style="font-size:11px;color:var(--muted)">web</span></div>
+    <button id="bOpen" class="primary">Open folder</button>
+    <span id="dirname" class="hint">no folder loaded</span>
+    <div id="stats">
+      <span class="s-keep" id="sKeep">0</span>
+      <span class="s-del" id="sDel">0</span>
+      <span class="s-flag" id="sFlag"></span>
+      <span class="s-tot" id="sTot"></span>
+      <button id="bHelp" class="sm">?</button>
+      <button id="bExport" class="teal sm" disabled>Export…</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="side">
+      <h3>Folders</h3>
+      <div id="tree"></div>
+      <div id="types"><h3 style="margin-left:0">File types</h3><div id="chips"></div></div>
+      <div id="bulk">
+        <button class="keep sm" id="bKeepAll">Keep all in folder</button>
+        <button class="del sm" id="bDelAll">Delete all in folder</button>
+        <button class="sm" id="bInvert">Invert folder</button>
+      </div>
+    </div>
+
+    <div id="stage">
+      <div id="head">
+        <div id="count">—</div>
+        <div id="ctx">Open a folder to begin</div>
+      </div>
+      <div id="bar"><div></div></div>
+      <div id="viewwrap">
+        <div id="view"><div id="placeholder">
+          <b>VisManager</b>
+          Pick a folder, or drag one onto this window.<br>
+          Your files are read as copies and never modified.
+        </div></div>
+        <div id="isobar">
+          <span class="hint">Isosurface</span>
+          <button class="sm" id="isoDown">−</button>
+          <span id="isoLbl">—</span>
+          <button class="sm" id="isoUp">+</button>
+          <input type="range" id="isoSlide" min="0" max="1000" value="120">
+          <button class="sm" id="isoReset">Recentre</button>
+        </div>
+        <div id="zoombar">
+          <button class="sm" id="zOut">−</button>
+          <span id="zlbl">Fit</span>
+          <button class="sm" id="zIn">+</button>
+          <button class="sm" id="zFit">Fit</button>
+          <button class="sm" id="z1">1:1</button>
+        </div>
+      </div>
+      <div id="foot">
+        <div id="fname"></div>
+        <div id="finfo"></div>
+        <div id="acts">
+          <button id="bPF">⏮ Folder</button>
+          <button id="bPI">◀ Prev<kbd>←</kbd></button>
+          <button class="keep" id="bKeep">✓ KEEP<kbd>K</kbd></button>
+          <button class="del" id="bDel">✗ DELETE<kbd>D</kbd></button>
+          <button id="bNote">✎ Note<kbd>N</kbd></button>
+          <button id="bFlag">⚐ Flag<kbd>F</kbd></button>
+          <button id="bNI">Next ▶<kbd>→</kbd></button>
+          <button id="bNF">Folder ⏭</button>
+        </div>
+        <div id="state"></div>
+        <div id="note"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="picker" webkitdirectory directory multiple hidden>
+<div id="drop">Drop a folder to load it</div>
+
+<dialog id="dNote">
+  <h2>Note</h2>
+  <div class="dbody">
+    <div id="noteFor" class="hint" style="margin-bottom:8px"></div>
+    <textarea id="noteText" placeholder="What needs attention about this file?"></textarea>
+    <div class="hint" style="margin-top:6px">An empty note removes the flag.</div>
+  </div>
+  <div class="dfoot">
+    <button id="noteDel" class="del sm">Remove flag</button>
+    <button id="noteCancel" class="sm">Cancel</button>
+    <button id="noteSave" class="keep sm">Save</button>
+  </div>
+</dialog>
+
+<dialog id="dExport">
+  <h2>Export</h2>
+  <div class="dbody">
+    <p class="hint">Nothing on disk is touched. These are downloads built from
+      the copies in memory.</p>
+    <div class="row"><label><input type="checkbox" id="xZip" checked> ZIP of kept files</label></div>
+    <div class="row"><label><input type="checkbox" id="xPdf" checked> Combined PDF of kept images</label></div>
+    <div class="row"><label><input type="checkbox" id="xNotes" checked> Notes report (.txt)</label></div>
+    <div class="row"><label><input type="checkbox" id="xList" checked> Delete list (.txt)</label></div>
+    <div class="hint" id="xSummary"></div>
+    <progress id="xProg" value="0" max="100" style="display:none"></progress>
+    <div class="hint" id="xStatus"></div>
+  </div>
+  <div class="dfoot">
+    <button id="xCancel" class="sm">Close</button>
+    <button id="xGo" class="primary sm">Export</button>
+  </div>
+</dialog>
+
+<dialog id="dHelp">
+  <h2>VisManager Web</h2>
+  <div class="dbody">
+    <p>Review a folder of images, keep the good ones, and export the result.
+       Files are read as <b>copies</b> — nothing on your disk is changed.</p>
+    <h3>Supported</h3>
+    <p class="hint">PNG, JPEG, GIF, WebP, BMP and PDF render natively. TGA is
+      decoded in-page. Cube files are listed but not rendered in the web
+      version — use the desktop app for 3D.</p>
+    <h3>Shortcuts</h3>
+    <p class="hint">
+      <kbd>K</kbd> keep &nbsp; <kbd>D</kbd> delete &nbsp; <kbd>Space</kbd> toggle &nbsp;
+      <kbd>N</kbd> note &nbsp; <kbd>F</kbd> flag<br>
+      <kbd>←</kbd> <kbd>→</kbd> navigate &nbsp; <kbd>,</kbd> <kbd>.</kbd> folders &nbsp;
+      <kbd>=</kbd> <kbd>-</kbd> zoom &nbsp; <kbd>0</kbd> fit
+    </p>
+    <h3>Exports</h3>
+    <p class="hint">A ZIP of kept files, a combined PDF, a notes report, and a
+      delete list you can run locally to prune the originals.</p>
+  </div>
+  <div class="dfoot"><button id="helpClose" class="sm">Close</button></div>
+</dialog>
+
+<script src="cube.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
