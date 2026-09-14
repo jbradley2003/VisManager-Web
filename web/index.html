@@ -93,10 +93,20 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
 #bar{height:3px;background:var(--border);margin:6px 14px 0;border-radius:2px}
 #bar div{height:100%;background:var(--keep-hi);border-radius:2px;width:0}
 #viewwrap{flex:1;position:relative;overflow:hidden;background:var(--keep-bg)}
-/* No flex centering here. applyTransform() already positions the element,
-   and centering it twice pushed every image off-screen — which is why
-   nothing appeared for images or PDFs. */
+/* The stage is a fixed frame the image lives inside. It MUST be positioned:
+   #view is absolutely positioned, so without position:relative here the stage
+   has no layout height, clientHeight reads 0, and the fit calculation divides
+   by it — which renders the image a few pixels wide. */
+#stagebox{position:absolute;left:14px;right:14px;top:58px;bottom:14px;
+  border-radius:10px;overflow:hidden;background:#0d0d16;
+  border:1px solid var(--border);
+  box-shadow:0 2px 16px rgba(0,0,0,.45)}
 #view{position:absolute;inset:0;cursor:grab}
+/* Crisp 1px outline tracking the image bounds. Drawn as its own element
+   because a border on the image would be scaled by the zoom transform. */
+#imgframe{position:absolute;pointer-events:none;display:none;
+  border:1px solid rgba(255,255,255,.32);
+  box-shadow:0 0 0 1px rgba(0,0,0,.55), 0 4px 20px rgba(0,0,0,.5)}
 #view.drag{cursor:grabbing}
 #view img,#view canvas{position:absolute;left:0;top:0;max-width:none;
   transform-origin:0 0;user-select:none;-webkit-user-drag:none}
@@ -104,14 +114,22 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
   transform:translate(-50%,-50%);width:80%}
 #placeholder{color:var(--muted);text-align:center;padding:30px}
 #placeholder b{display:block;font-size:36px;color:#6b6b8c;margin-bottom:10px}
-#zoombar{position:absolute;top:8px;right:10px;display:flex;gap:6px;
+/* One row for every overlay control. They used to be positioned absolutely at
+   the same coordinates, so the isosurface bar and the rotate/zoom bar drew on
+   top of each other and both covered the settings panel. */
+#topbars{position:absolute;top:8px;left:10px;right:10px;z-index:15;
+  display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
+#zoombar{margin-left:auto;display:flex;gap:6px;
   background:rgba(30,30,46,.85);padding:6px;border-radius:10px}
-#imgbar{position:absolute;top:8px;left:10px;display:none;gap:6px;
+#imgbar{display:none;gap:6px;
   align-items:center;background:rgba(30,30,46,.88);padding:6px 10px;
   border-radius:10px}
 #rotLbl{min-width:56px;text-align:center;font-size:12px;font-weight:700;
   color:var(--flag-text)}
-#cubePanel{position:absolute;top:52px;left:10px;width:290px;display:none;
+/* Sits below the bar row; its top is set from the measured row height so it
+   is never covered, however the bars wrap. */
+#cubePanel{position:absolute;top:60px;left:10px;width:290px;display:none;
+  z-index:25;
   background:rgba(26,26,40,.96);border:1px solid var(--border);
   border-radius:12px;z-index:20;font-size:12px}
 #cubePanel.on{display:block}
@@ -129,7 +147,7 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
 .cp-el{display:flex;flex-direction:column;align-items:center;gap:2px}
 .cp-el b{font-size:11px;color:var(--text)}
 .val{color:var(--flag-text);font-weight:700}
-#isobar{position:absolute;top:8px;left:10px;display:none;gap:8px;
+#isobar{display:none;gap:8px;
   align-items:center;background:rgba(30,30,46,.88);padding:6px 10px;
   border-radius:10px}
 #isoLbl{min-width:74px;text-align:center;font-weight:700;font-size:12px;
@@ -212,11 +230,12 @@ progress{width:100%;height:8px}
       </div>
       <div id="bar"><div></div></div>
       <div id="viewwrap">
-        <div id="stagebox"><div id="view"><div id="placeholder">
+        <div id="stagebox"><div id="imgframe"></div><div id="view"><div id="placeholder">
           <b>VisManager</b>
           Pick a folder, or drag one onto this window.<br>
           Your files are read as copies and never modified.
         </div></div></div>
+        <div id="topbars">
         <div id="isobar">
           <span class="hint">Isosurface</span>
           <button class="sm" id="isoDown">−</button>
@@ -225,6 +244,23 @@ progress{width:100%;height:8px}
           <input type="range" id="isoSlide" min="0" max="1000" value="120">
           <button class="sm" id="isoReset">Recentre</button>
           <button class="sm teal" id="isoMore">Settings…</button>
+        </div>
+        <div id="imgbar">
+          <button class="sm" id="rotL" title="Rotate left ["></button>
+          <button class="sm" id="rotR" title="Rotate right ]"></button>
+          <button class="sm" id="flipH" title="Flip horizontal H"></button>
+          <button class="sm" id="flipV" title="Flip vertical V"></button>
+          <span id="rotLbl">—</span>
+          <button class="sm" id="rotReset" title="Reset R">Reset</button>
+        </div>
+        <div id="zoombar">
+          <button class="sm" id="zOut" title="Zoom out"></button>
+          <span id="zlbl">Fit</span>
+          <button class="sm" id="zIn" title="Zoom in"></button>
+          <button class="sm" id="zFit">Fit</button>
+          <button class="sm" id="z1">1:1</button>
+          <button class="sm" id="zFull" title="Fullscreen (F11)"></button>
+        </div>
         </div>
         <div id="cubePanel">
           <div class="cp-head">
@@ -291,22 +327,7 @@ progress{width:100%;height:8px}
             </div>
           </div>
         </div>
-        <div id="imgbar">
-          <button class="sm" id="rotL" title="Rotate left ["></button>
-          <button class="sm" id="rotR" title="Rotate right ]"></button>
-          <button class="sm" id="flipH" title="Flip horizontal H"></button>
-          <button class="sm" id="flipV" title="Flip vertical V"></button>
-          <span id="rotLbl">—</span>
-          <button class="sm" id="rotReset" title="Reset R">Reset</button>
-        </div>
-        <div id="zoombar">
-          <button class="sm" id="zOut" title="Zoom out"></button>
-          <span id="zlbl">Fit</span>
-          <button class="sm" id="zIn" title="Zoom in"></button>
-          <button class="sm" id="zFit">Fit</button>
-          <button class="sm" id="z1">1:1</button>
-          <button class="sm" id="zFull" title="Fullscreen (F11)"></button>
-        </div>
+
       </div>
       <div id="foot">
         <div id="fname"></div>

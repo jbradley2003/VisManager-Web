@@ -44,6 +44,7 @@ jobs:
           npm install jsdom --no-audit --no-fund --silent
           node web/test/load.test.js
           node web/test/smoke.test.js
+          node web/test/cube.test.js
 
       - uses: actions/configure-pages@v5
 

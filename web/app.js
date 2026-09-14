@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.19.2';
+const BUILD = '1.21.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -192,6 +192,8 @@ async function show() {
   setBtnIcon('bFlag', 'flag');
 
   showIsoControls(false);
+  { const fr = $('imgframe'); if (fr) fr.style.display = 'none'; }
+  layoutOverlays();
   try {
     S.pendingRevoke = staleUrl;
     if (NATIVE.has(f.type)) await showImage(f);
@@ -244,6 +246,21 @@ function computeFit() {
   return Math.min((wrap.clientWidth - 24) / W, (wrap.clientHeight - 24) / H, 1);
 }
 
+/**
+ * Keep the image inside the stage.
+ *
+ * When it is smaller than the stage it stays centred and cannot be dragged at
+ * all; when it is larger, the pan is limited so an edge can never come inside
+ * the frame. Without this the picture could be flung off into the surround,
+ * which is what made navigation feel loose.
+ */
+function clampPan(dispW, dispH, stageW, stageH) {
+  const limitX = Math.max(0, (dispW - stageW) / 2);
+  const limitY = Math.max(0, (dispH - stageH) / 2);
+  S.ox = Math.max(-limitX, Math.min(limitX, S.ox));
+  S.oy = Math.max(-limitY, Math.min(limitY, S.oy));
+}
+
 function applyTransform() {
   if (!S.el) return;
   const s = S.fit * S.zoom;
@@ -254,6 +271,10 @@ function applyTransform() {
   // belongs. The previous version mixed transform-origin 0 0 with centre-based
   // translations and then divided the scale back out, which left the content
   // offset by roughly half a canvas.
+  const swap = S.rot % 2 === 1;
+  const dispW = (swap ? H : W) * s, dispH = (swap ? W : H) * s;
+  clampPan(dispW, dispH, wrap.clientWidth, wrap.clientHeight);
+
   const cx = wrap.clientWidth / 2 + S.ox;
   const cy = wrap.clientHeight / 2 + S.oy;
 
@@ -264,6 +285,16 @@ function applyTransform() {
     `translate(${cx - W / 2}px, ${cy - H / 2}px) ` +
     `rotate(${S.rot * 90}deg) ` +
     `scale(${S.mirror ? -s : s}, ${s})`;
+
+  // Track the image bounds with the outline element
+  const fr = $('imgframe');
+  if (fr) {
+    fr.style.display = 'block';
+    fr.style.left = (cx - dispW / 2) + 'px';
+    fr.style.top = (cy - dispH / 2) + 'px';
+    fr.style.width = dispW + 'px';
+    fr.style.height = dispH + 'px';
+  }
 
   $('zlbl').textContent = Math.abs(S.zoom - 1) < .001 ? 'Fit' : Math.round(s * 100) + '%';
   const bits = [];
@@ -366,7 +397,14 @@ const unhex = s2 => parseInt(s2.slice(1), 16);
 
 async function showCube(f) {
   const three = await loadThree();
-  if (!three) { showUnsupported(f, 'three.js did not load'); return; }
+  if (!three) {
+    // Report the real reason. Swallowing it left only "did not load", which
+    // gives no clue whether the CDN is blocked, offline, or something else.
+    showUnsupported(f, '3D library could not be loaded: ' +
+      (C3.threeError || 'unknown error') +
+      '. Check the browser console and any content blockers.');
+    return;
+  }
 
   $('view').replaceChildren(
     Object.assign(document.createElement('div'),
@@ -390,15 +428,22 @@ async function showCube(f) {
 let THREE_PROMISE = null;
 function loadThree() {
   if (!THREE_PROMISE) {
-    THREE_PROMISE = import('https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js')
-      .catch(() => null);
+    THREE_PROMISE = import(
+      'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js')
+      .catch(err => {
+        C3.threeError = err && err.message ? err.message : String(err);
+        console.error('three.js failed to load:', err);
+        return null;
+      });
   }
   return THREE_PROMISE;
 }
 
 function buildCubeScene(THREE, grid) {
   const wrap = $('stagebox');
-  const w = wrap.clientWidth, h = wrap.clientHeight;
+  // A zero-sized stage yields a zero-sized renderer and a NaN aspect ratio,
+  // so the scene renders nothing at all. Fall back rather than draw blank.
+  const w = Math.max(64, wrap.clientWidth), h = Math.max(64, wrap.clientHeight);
 
   if (!C3.renderer || C3.rendererAA !== C3.aa) {
     // Antialiasing is fixed at context creation, so changing it means a new
@@ -711,6 +756,7 @@ function showIsoControls(on) {
   $('zoombar').style.display = 'flex';
   $('imgbar').style.display = 'flex';
   if (on) updateCubeOrientLabel();
+  layoutOverlays();
   if (on && C3.grid) {
     C3.peak = Math.max(Math.abs(C3.grid.range[0]), Math.abs(C3.grid.range[1]));
     const sl = $('isoSlide');
@@ -1211,9 +1257,29 @@ console.log(`VisManager Web build ${BUILD}`);
     bPF: 'folder-prev', bPI: 'file-prev', bNI: 'file-next', bNF: 'folder-next',
     bNote: 'pencil', bFlag: 'flag', bOpen: 'folder', bKeys: 'keyboard',
     bExport: 'doc', zFull: 'corners',
+    // These four had their text glyphs stripped and no icon assigned, so they
+    // rendered as blank pills.
+    rotL: 'undo', rotR: 'redo',
+    flipH: 'flip-horizontal', flipV: 'flip-vertical',
+    zIn: 'expand', zOut: 'collapse',
   };
   for (const [id, name] of Object.entries(map)) setBtnIcon(id, name);
 })();
+
+/**
+ * Keep the stage and the settings panel clear of the overlay bars.
+ *
+ * The bar row wraps on narrow windows, so its height is not fixed; measuring
+ * it is the only way to place things below it reliably.
+ */
+function layoutOverlays() {
+  const bars = $('topbars'), stage = $('stagebox'), panel = $('cubePanel');
+  if (!bars || !stage) return;
+  const h = bars.offsetHeight || 40;
+  stage.style.top = (h + 18) + 'px';
+  if (panel) panel.style.top = (h + 16) + 'px';
+}
+window.addEventListener('resize', layoutOverlays);
 
 /* Sidebar resizing. Width is remembered so the layout survives a reload. */
 (function () {
