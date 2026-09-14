@@ -116,6 +116,7 @@ function drawTree() {
                       (flags ? `  ⚐${flags}` : '');
       d.title = folder;
       d.onclick = () => { S.fi = S.folders.indexOf(folder); S.ii = 0; show(); };
+      d.oncontextmenu = e => { e.preventDefault(); removeFolder(folder); };
       tree.appendChild(d);
     }
   }
@@ -155,8 +156,12 @@ async function show() {
   drawTree(); drawStats();
   const f = curFile();
   const view = $('view');
-  if (S.url) { URL.revokeObjectURL(S.url); S.url = null; }
-  view.innerHTML = '';
+  // Do NOT clear the view here. Emptying it before the next file has decoded
+  // leaves the background exposed for a frame or two, which reads as a flash
+  // on every navigation. place() swaps the new element in atomically, and the
+  // old object URL is released after the swap.
+  const staleUrl = S.url;
+  S.url = null;
 
   if (!f) {
     view.innerHTML = '<div id="placeholder">Nothing to show with the current filters.</div>';
@@ -179,9 +184,11 @@ async function show() {
   const note = S.notes.get(f.path);
   $('note').textContent = note ? `⚐ ${note}` : (S.notes.has(f.path) ? '⚐ flagged' : '');
   $('bFlag').className = S.notes.has(f.path) ? 'flag' : '';
+  setBtnIcon('bFlag', 'flag');
 
   showIsoControls(false);
   try {
+    S.pendingRevoke = staleUrl;
     if (NATIVE.has(f.type)) await showImage(f);
     else if (f.type === 'pdf') await showPdf(f);
     else if (f.type === 'tga') await showTga(f);
@@ -190,24 +197,42 @@ async function show() {
   } catch (err) {
     showUnsupported(f, String(err && err.message || err));
   }
+  if (S.pendingRevoke) {            // nothing swapped in; release anyway
+    URL.revokeObjectURL(S.pendingRevoke);
+    S.pendingRevoke = null;
+  }
 }
 
 function place(el, w, h) {
   S.el = el; S.natural = [w, h];
+  // Position before the element is visible, so it never appears unplaced
+  el.style.position = 'absolute';
+  el.style.left = '0px';
+  el.style.top = '0px';
   const wrap = $('viewwrap');
   S.zoom = 1; S.ox = 0; S.oy = 0; S.rot = 0; S.mirror = false;
   S.fit = computeFit();
-  $('view').innerHTML = ''; $('view').appendChild(el);
-  applyTransform();
+  applyTransform();                 // place it while still detached
+  swapIn(el);
   $('finfo').textContent = `${f_info()} │ ${w} × ${h}`;
 }
+/** Replace the view contents in one step, so nothing blanks in between. */
+function swapIn(el) {
+  const view = $('view');
+  view.replaceChildren(el);
+  if (S.pendingRevoke) {
+    URL.revokeObjectURL(S.pendingRevoke);
+    S.pendingRevoke = null;
+  }
+}
+
 function f_info() {
   const f = curFile(), list = cur();
   return `${f.folder} │ image ${S.ii + 1}/${list.length} │ ${f.type.toUpperCase()}` +
          ` │ ${(f.file.size / 1024).toFixed(0)} KB`;
 }
 function computeFit() {
-  const wrap = $('viewwrap');
+  const wrap = $('stagebox');
   const swap = S.rot % 2 === 1;              // a quarter turn swaps the footprint
   const W = swap ? S.natural[1] : S.natural[0];
   const H = swap ? S.natural[0] : S.natural[1];
@@ -217,7 +242,7 @@ function computeFit() {
 function applyTransform() {
   if (!S.el) return;
   const s = S.fit * S.zoom;
-  const wrap = $('viewwrap');
+  const wrap = $('stagebox');
   const W = S.natural[0], H = S.natural[1];
 
   // Transform about the element's own centre and place that centre where it
@@ -324,7 +349,10 @@ const C3 = {renderer: null, scene: null, camera: null, root: null,
             flat: false, showAtoms: true, showBonds: true,
             elementColors: {},          // {atomicNumber: 0xrrggbb}
             atomScale: 1.0, showH: true, showPos: true, showNeg: true,
-            smooth: 4, bondTol: 0.45,
+            smooth: 0, bondTol: 0.45,
+            // Graphics settings
+            quality: 'high', brightness: 1.0, tone: true,
+            sphereSeg: [20, 14], cylSeg: 12, pixelCap: 2, aa: true,
             homeDist: 0,
             surfaces: [], atomMeshes: [], bondMeshes: []};
 
@@ -335,7 +363,9 @@ async function showCube(f) {
   const three = await loadThree();
   if (!three) { showUnsupported(f, 'three.js did not load'); return; }
 
-  $('view').innerHTML = '<div id="placeholder">Reading cube…</div>';
+  $('view').replaceChildren(
+    Object.assign(document.createElement('div'),
+                  {id: 'placeholder', textContent: 'Reading cube…'}));
   await new Promise(r => setTimeout(r, 0));       // let the message paint
   const text = await f.file.text();
   const full = CubeLib.parseCube(text);
@@ -362,18 +392,36 @@ function loadThree() {
 }
 
 function buildCubeScene(THREE, grid) {
-  const wrap = $('viewwrap');
+  const wrap = $('stagebox');
   const w = wrap.clientWidth, h = wrap.clientHeight;
 
-  if (!C3.renderer) {
-    C3.renderer = new THREE.WebGLRenderer({antialias: true, alpha: false});
-    C3.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  if (!C3.renderer || C3.rendererAA !== C3.aa) {
+    // Antialiasing is fixed at context creation, so changing it means a new
+    // renderer. Dispose the old one first — WebGL contexts are limited and
+    // browsers drop the oldest after roughly a dozen.
+    if (C3.renderer) {
+      C3.renderer.dispose();
+      C3.renderer.domElement.remove();
+    }
+    C3.renderer = new THREE.WebGLRenderer({antialias: C3.aa, alpha: false});
+    C3.rendererAA = C3.aa;
   }
-  C3.renderer.setSize(w, h, false);
+  C3.renderer.setPixelRatio(Math.min(devicePixelRatio, C3.pixelCap));
+  // ACES tone mapping keeps bright highlights on the lobes from clipping flat
+  C3.renderer.toneMapping = C3.tone ? THREE.ACESFilmicToneMapping
+                                    : THREE.NoToneMapping;
+  C3.renderer.toneMappingExposure = 1.0;
+  // updateStyle MUST be true. With setPixelRatio(2) on a Retina display the
+  // drawing buffer is 2x the CSS size; skipping the style update leaves the
+  // canvas with no CSS dimensions, so the browser falls back to the buffer
+  // size and the scene renders double-size anchored at the top-left. That is
+  // the "not centred on Mac" bug — it is invisible at devicePixelRatio 1.
+  C3.renderer.setSize(w, h, true);
   const canvas = C3.renderer.domElement;
   canvas.style.transform = '';
-  $('view').innerHTML = '';
-  $('view').appendChild(canvas);
+  canvas.style.left = '0px';
+  canvas.style.top = '0px';
+  swapIn(canvas);
   S.el = null;                       // the 2D pan/zoom path does not apply
 
   const scene = new THREE.Scene();
@@ -386,11 +434,19 @@ function buildCubeScene(THREE, grid) {
 
   // Key / fill / rim, the same rig as the desktop version. A single headlight
   // flattens a rounded lobe into a featureless disc.
-  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-  const key = new THREE.DirectionalLight(0xffffff, 1.0); key.position.set(1, 1, 1);
-  const fill = new THREE.DirectionalLight(0xffffff, 0.45); fill.position.set(-1, 0.4, 0.6);
-  const rim = new THREE.DirectionalLight(0xffffff, 0.3); rim.position.set(0, -1, -0.8);
+  // three.js r155 switched lights to physical units: internally the renderer
+  // uses `scaleFactor = useLegacyLights ? Math.PI : 1`, and useLegacyLights
+  // now defaults to false. Intensities written for the old behaviour come out
+  // about 3.14x too dim, which is why atoms looked darker than they should.
+  // Scaling by PI restores the intended brightness without relying on the
+  // deprecated legacy flag.
+  const L = Math.PI * C3.brightness;
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35 * L));
+  const key = new THREE.DirectionalLight(0xffffff, 1.0 * L); key.position.set(1, 1, 1);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.45 * L); fill.position.set(-1, 0.4, 0.6);
+  const rim = new THREE.DirectionalLight(0xffffff, 0.3 * L); rim.position.set(0, -1, -0.8);
   scene.add(key, fill, rim);
+  C3.lights = {ambient: scene.children[0], key, fill, rim};
 
   addIsoSurfaces(THREE, root, grid, C3.iso);
   addMolecule(THREE, root, grid);
@@ -460,7 +516,7 @@ function addIsoSurfaces(THREE, root, grid, iso) {
 
 function addMolecule(THREE, root, grid) {
   C3.atomMeshes = []; C3.bondMeshes = [];
-  const sphere = new THREE.SphereGeometry(1, 20, 14);
+  const sphere = new THREE.SphereGeometry(1, C3.sphereSeg[0], C3.sphereSeg[1]);
   for (const a of grid.atoms) {
     const m = new THREE.Mesh(sphere, new THREE.MeshPhongMaterial({
       color: C3.elementColors[a.z] ?? CubeLib.colorOf(a.z), shininess: 60}));
@@ -475,7 +531,7 @@ function addMolecule(THREE, root, grid) {
   // Thinner and darker than the atoms, so bonds read as structure rather
   // than competing with the orbital surface.
   const bondMat = new THREE.MeshPhongMaterial({color: 0x6e6e78, shininess: 25});
-  const cyl = new THREE.CylinderGeometry(1, 1, 1, 12);
+  const cyl = new THREE.CylinderGeometry(1, 1, 1, C3.cylSeg);
   for (const [i, j] of CubeLib.inferBonds(grid.atoms, C3.bondTol)) {
     const a = grid.atoms[i], b = grid.atoms[j];
     const va = new THREE.Vector3(a.x, a.y, a.zc);
@@ -515,6 +571,42 @@ function rebuildIso(newIso) {
     $('cpIsoVal').textContent = isoLabel(newIso);
     renderCube();
   });
+}
+
+const GFX_PRESETS = {
+  low:    {sphereSeg: [10, 7],  cylSeg: 6,  pixelCap: 1, aa: false, tone: false},
+  medium: {sphereSeg: [16, 11], cylSeg: 8,  pixelCap: 1.5, aa: true, tone: true},
+  high:   {sphereSeg: [20, 14], cylSeg: 12, pixelCap: 2, aa: true, tone: true},
+  ultra:  {sphereSeg: [32, 22], cylSeg: 20, pixelCap: 3, aa: true, tone: true},
+};
+
+function applyGraphics(preset) {
+  if (preset && GFX_PRESETS[preset]) {
+    Object.assign(C3, GFX_PRESETS[preset], {quality: preset});
+  }
+  if (!C3.grid) return;
+  // Antialiasing and pixel ratio need the renderer rebuilt; geometry detail
+  // needs the molecule rebuilt. Doing the whole scene keeps it simple and is
+  // fast enough because the isosurface is not re-extracted.
+  loadThree().then(THREE => {
+    if (!THREE) return;
+    const wrap = $('viewwrap');
+    const rot = C3.root ? C3.root.rotation.clone() : null;
+    buildCubeScene(THREE, C3.grid);
+    if (rot && C3.root) C3.root.rotation.copy(rot);
+    renderCube();
+  });
+}
+
+function setBrightness(v) {
+  C3.brightness = v;
+  if (!C3.lights) return;
+  const L = Math.PI * v;
+  C3.lights.ambient.intensity = 0.35 * L;
+  C3.lights.key.intensity = 1.0 * L;
+  C3.lights.fill.intensity = 0.45 * L;
+  C3.lights.rim.intensity = 0.3 * L;
+  renderCube();
 }
 
 function restyle() {
@@ -571,6 +663,9 @@ function syncPanel() {
   $('cpPosOn').checked = C3.showPos;
   $('cpNegOn').checked = C3.showNeg;
   $('cpH').checked = C3.showH;
+  $('cpBright').value = Math.round(C3.brightness * 100);
+  $('cpBrightVal').textContent = Math.round(C3.brightness * 100) + '%';
+  gqNote();
   $('cpSmooth').value = C3.smooth;
   $('cpSmoothVal').textContent = C3.smooth ? C3.smooth + ' passes' : 'off';
   $('cpTol').value = Math.round(C3.bondTol * 100);
@@ -606,8 +701,11 @@ function isoLabel(iso) {
 function showIsoControls(on) {
   $('isobar').style.display = on ? 'flex' : 'none';
   // The 2D zoom controls are meaningless for a 3D scene
-  $('zoombar').style.display = on ? 'none' : 'flex';
-  $('imgbar').style.display = on ? 'none' : 'flex';
+  // Both toolbars stay up for cubes — their buttons drive the camera instead
+  // of the bitmap, matching the desktop build.
+  $('zoombar').style.display = 'flex';
+  $('imgbar').style.display = 'flex';
+  if (on) updateCubeOrientLabel();
   if (on && C3.grid) {
     C3.peak = Math.max(Math.abs(C3.grid.range[0]), Math.abs(C3.grid.range[1]));
     const sl = $('isoSlide');
@@ -624,6 +722,7 @@ function showUnsupported(f, why) {
   const reason = why || (f.type === 'cube'
     ? 'Cube files need the desktop app for 3D rendering.'
     : 'No in-browser renderer for this format.');
+  $('view').replaceChildren();
   $('view').innerHTML =
     `<div id="placeholder"><b>${f.type.toUpperCase()}</b>${f.name}<br><br>
      <span style="color:var(--del-hi)">${reason}</span><br><br>
@@ -660,6 +759,32 @@ function toggleFlag() {
   S.notes.has(f.path) ? S.notes.delete(f.path) : S.notes.set(f.path, '');
   show();
 }
+function removeFile(path) {
+  // Drop it from the session entirely. This is separate from marking DELETE:
+  // a removed file appears in no export and no delete list, as though it had
+  // never been loaded.
+  S.files = S.files.filter(f => f.path !== path);
+  S.state.delete(path);
+  S.notes.delete(path);
+  rebuild();
+  if (S.ii >= cur().length) S.ii = Math.max(0, cur().length - 1);
+  show();
+}
+
+function removeFolder(folder) {
+  const n = S.files.filter(f => f.folder === folder).length;
+  if (!confirm(`Remove "${folder}" and its ${n} file(s) from the review?\n\n` +
+               `Nothing on disk is touched.`)) return;
+  S.files = S.files.filter(f => f.folder !== folder);
+  for (const p of [...S.state.keys()]) {
+    if (p.startsWith(folder + '/')) { S.state.delete(p); S.notes.delete(p); }
+  }
+  rebuild();
+  S.fi = Math.min(S.fi, Math.max(0, S.folders.length - 1));
+  S.ii = 0;
+  show();
+}
+
 function bulk(fn) {
   for (const f of cur()) S.state.set(f.path, fn(S.state.get(f.path)));
   show();
@@ -712,7 +837,8 @@ async function runExport() {
   const prog = $('xProg'), status = $('xStatus');
   prog.style.display = 'block'; prog.value = 0;
   const steps = [$('xZip').checked, $('xPdf').checked, $('xPdfEach').checked,
-                 $('xNotes').checked, $('xList').checked].filter(Boolean).length || 1;
+                 $('xPdfFile').checked, $('xNotes').checked,
+                 $('xList').checked].filter(Boolean).length || 1;
   let done = 0;
   const tick = msg => { status.textContent = msg; prog.value = (done / steps) * 100; };
 
@@ -733,6 +859,21 @@ async function runExport() {
     const blob = await zip.generateAsync({type: 'blob', compression: 'STORE'},
       m => { status.textContent = `zipping… ${m.percent.toFixed(0)}%`; });
     download('kept-files.zip', blob);
+    done++;
+  }
+  if ($('xPdfFile').checked) {
+    // One PDF per image — the per-file mode from the desktop app.
+    const images = kept.filter(f => NATIVE.has(f.type) || f.type === 'tga');
+    let n = 0;
+    for (const f of images) {
+      status.textContent = `PDF ${++n}/${images.length} — ${f.name}`;
+      prog.value = ((done + n / images.length) / steps) * 100;
+      const blob = await buildPdf([f]);
+      if (blob) {
+        const base = f.name.replace(/\.[^.]+$/, '');
+        download(`${base}.pdf`, blob);
+      }
+    }
     done++;
   }
   if ($('xPdfEach').checked) {
@@ -825,6 +966,23 @@ async function showTgaOffscreen(f) {
   return clone;
 }
 
+/* ── Icons ───────────────────────────────────────────────────────────────
+ * Applied once at startup. Buttons whose label changes with state (the nav
+ * mode button, the fullscreen toggle) re-apply their own icon when they
+ * update, so the icon is never lost to an innerHTML rewrite. */
+function applyIcons() {
+  const map = {
+    bOpen: 'folder', bExport: 'doc', bKeys: 'keyboard',
+    bNote: 'pencil', bFlag: 'flag',
+    bPI: 'file-prev', bNI: 'file-next',
+    bPF: 'folder-prev', bNF: 'folder-next',
+    rotL: 'undo', rotR: 'redo', flipH: 'flip-h', flipV: 'flip-v',
+    zIn: 'expand', zOut: 'collapse', zFull: 'corners',
+  };
+  for (const [id, name] of Object.entries(map)) setIcon(id, name);
+}
+applyIcons();
+
 /* ── Wiring ──────────────────────────────────────────────────────────────── */
 $('bOpen').onclick = () => $('picker').click();
 $('picker').onchange = e => ingest(e.target.files);
@@ -835,6 +993,14 @@ $('bNI').onclick = nextImage;
 $('bPF').onclick = () => stepFolder(-1);
 $('bNF').onclick = () => stepFolder(1);
 $('bFlag').onclick = toggleFlag;
+$('bDrop').onclick = () => {
+  const f = curFile();
+  if (f && confirm(`Remove "${f.name}" from the review?\n\n` +
+                   `Nothing on disk is touched.`)) removeFile(f.path);
+};
+$('bDropFolder').onclick = () => {
+  if (S.folders.length) removeFolder(S.folders[S.fi]);
+};
 $('bKeepAll').onclick = () => bulk(() => true);
 $('bDelAll').onclick = () => bulk(() => false);
 $('bInvert').onclick = () => bulk(v => !v);
@@ -888,6 +1054,50 @@ $('isoReset').onclick = () => {
   renderCube();
 };
 
+/* Cube camera operations.
+ *
+ * Same mapping as the desktop build: on a cube these controls move the
+ * camera rather than rotating the rendered bitmap, because spinning a picture
+ * of a 3D scene leaves the lighting and perspective wrong.
+ *
+ *   rotate  -> roll about the view axis
+ *   flip H  -> half turn about the vertical
+ *   flip V  -> half turn about the horizontal
+ *   reset   -> back to the framing the file opened with
+ */
+function cubeOp(op) {
+  if (!C3.root) return;
+  const HALF = Math.PI;
+  if (op === 'cw') C3.root.rotateZ(-Math.PI / 2);
+  else if (op === 'ccw') C3.root.rotateZ(Math.PI / 2);
+  else if (op === 'h') C3.root.rotateY(HALF);
+  else if (op === 'v') C3.root.rotateX(HALF);
+  else { C3.root.rotation.set(0, 0, 0); refit(); }
+  renderCube();
+  updateCubeOrientLabel();
+}
+
+function updateCubeOrientLabel() {
+  if (!C3.root) return;
+  const deg = v => Math.round(v * 180 / Math.PI / 5) * 5;
+  const r = C3.root.rotation;
+  const bits = [];
+  if (deg(r.x)) bits.push('X' + deg(r.x) + '\u00b0');
+  if (deg(r.y)) bits.push('Y' + deg(r.y) + '\u00b0');
+  if (deg(r.z)) bits.push('Z' + deg(r.z) + '\u00b0');
+  $('rotLbl').textContent = bits.length ? bits.join(' ') : '3D';
+}
+
+function cubeZoom(factor) {
+  if (!C3.camera) return;
+  C3.dist *= factor;
+  C3.camera.position.setZ(C3.dist);
+  C3.camera.updateProjectionMatrix();
+  renderCube();
+  $('zlbl').textContent = C3.homeDist
+    ? Math.round(C3.homeDist / C3.dist * 100) + '%' : 'Fit';
+}
+
 /* 2D rotate / flip.
  * Flips are composed the same way as in the desktop build: mirroring only
  * commutes with rotation after negating the angle, so a flip after a rotation
@@ -904,11 +1114,14 @@ function flip(axis) {
   S.fit = computeFit();
   applyTransform();
 }
-$('rotL').onclick = () => rotate(-1);
-$('rotR').onclick = () => rotate(1);
-$('flipH').onclick = () => flip('h');
-$('flipV').onclick = () => flip('v');
-$('rotReset').onclick = () => { S.rot = 0; S.mirror = false; S.fit = computeFit(); applyTransform(); };
+$('rotL').onclick = () => { if (C3.grid) cubeOp('ccw'); else rotate(-1); };
+$('rotR').onclick = () => { if (C3.grid) cubeOp('cw'); else rotate(1); };
+$('flipH').onclick = () => { if (C3.grid) cubeOp('h'); else flip('h'); };
+$('flipV').onclick = () => { if (C3.grid) cubeOp('v'); else flip('v'); };
+$('rotReset').onclick = () => {
+  if (C3.grid) { cubeOp('reset'); return; }
+  S.rot = 0; S.mirror = false; S.fit = computeFit(); applyTransform();
+};
 
 /* Cube settings panel */
 $('isoMore').onclick = () => {
@@ -956,7 +1169,9 @@ $('cpReset').onclick = () => {
   Object.assign(C3, {opacity: 0.62, pos: 0xf2d140, neg: 0x40bad6,
                      bg: 0x0b0712, flat: false, showAtoms: true,
                      showBonds: true, elementColors: {}, atomScale: 1.0,
-                     showH: true, showPos: true, showNeg: true});
+                     showH: true, showPos: true, showNeg: true,
+                     brightness: 1.0});
+  applyGraphics('high');
   rebuildMolecule(); refit();
   if (C3.grid) rebuildIso(CubeLib.chooseIsovalue(C3.grid.values));
   restyle(); syncPanel();
@@ -986,11 +1201,22 @@ function refit() {
   if (!C3.root) return;
   loadThree().then(THREE => {
     if (!THREE) return;
-    const wrap = $('viewwrap');
+    const wrap = $('stagebox');
     frameScene(THREE, wrap.clientWidth, wrap.clientHeight);
     renderCube();
   });
 }
+
+/* Apply the supplied icon set to the buttons. Done in JS rather than inline
+ * markup so the base64 payload lives in one file. */
+(function applyIcons() {
+  const map = {
+    bPF: 'folder-prev', bPI: 'file-prev', bNI: 'file-next', bNF: 'folder-next',
+    bNote: 'pencil', bFlag: 'flag', bOpen: 'folder', bKeys: 'keyboard',
+    bExport: 'doc', zFull: 'corners',
+  };
+  for (const [id, name] of Object.entries(map)) setBtnIcon(id, name);
+})();
 
 /* Sidebar resizing. Width is remembered so the layout survives a reload. */
 (function () {
@@ -1015,6 +1241,32 @@ function refit() {
     if (C3.grid) refit();
   });
 })();
+
+/* Graphics quality */
+function gqNote() {
+  const [a1, b1] = C3.sphereSeg;
+  $('gqNote').textContent =
+    `${a1}x${b1} spheres, ${C3.cylSeg}-sided bonds, up to ${C3.pixelCap}x ` +
+    `pixel ratio${C3.aa ? ', AA' : ''}${C3.tone ? ', tone mapped' : ''}`;
+  for (const [id, key] of [['gqLow', 'low'], ['gqMed', 'medium'],
+                           ['gqHigh', 'high'], ['gqUltra', 'ultra']]) {
+    $(id).style.background = C3.quality === key
+      ? 'var(--teal)' : 'var(--nav)';
+  }
+  $('cpAA').checked = C3.aa;
+  $('cpTone').checked = C3.tone;
+}
+for (const [id, key] of [['gqLow', 'low'], ['gqMed', 'medium'],
+                         ['gqHigh', 'high'], ['gqUltra', 'ultra']]) {
+  $(id).onclick = () => { applyGraphics(key); gqNote(); };
+}
+$('cpBright').oninput = e => {
+  const v = +e.target.value / 100;
+  $('cpBrightVal').textContent = e.target.value + '%';
+  setBrightness(v);
+};
+$('cpAA').onchange = e => { C3.aa = e.target.checked; C3.quality = 'custom'; applyGraphics(); gqNote(); };
+$('cpTone').onchange = e => { C3.tone = e.target.checked; C3.quality = 'custom'; applyGraphics(); gqNote(); };
 
 /* Surface quality and bonding */
 $('cpSmooth').oninput = e => {
@@ -1043,12 +1295,12 @@ function toggleFullscreen() {
 $('zFull').onclick = toggleFullscreen;
 document.addEventListener('fullscreenchange', () => {
   const on = !!document.fullscreenElement;
-  $('zFull').textContent = on ? '⤡' : '⛶';
+  setIcon('zFull', on ? 'collapse' : 'corners');
   // The canvas has a fixed pixel size, so it must be resized to the new box
   setTimeout(() => {
     if (C3.renderer && C3.camera) {
-      const w = $('viewwrap').clientWidth, h = $('viewwrap').clientHeight;
-      C3.renderer.setSize(w, h, false);
+      const w = $('stagebox').clientWidth, h = $('stagebox').clientHeight;
+      C3.renderer.setSize(w, h, true);
       C3.camera.aspect = w / h;
       C3.camera.updateProjectionMatrix();
       renderCube();
@@ -1058,16 +1310,20 @@ document.addEventListener('fullscreenchange', () => {
 });
 
 /* Zoom and pan */
-$('zIn').onclick = () => { S.zoom *= 1.25; applyTransform(); };
-$('zOut').onclick = () => { S.zoom /= 1.25; applyTransform(); };
-$('zFit').onclick = () => { S.zoom = 1; S.ox = S.oy = 0; applyTransform(); };
-$('z1').onclick = () => { S.zoom = 1 / S.fit; S.ox = S.oy = 0; applyTransform(); };
+$('zIn').onclick = () => { if (C3.grid) return cubeZoom(1 / 1.15); S.zoom *= 1.25; applyTransform(); };
+$('zOut').onclick = () => { if (C3.grid) return cubeZoom(1.15); S.zoom /= 1.25; applyTransform(); };
+$('zFit').onclick = () => {
+  if (C3.grid) { refit(); $('zlbl').textContent = 'Fit'; return; }
+  S.zoom = 1; S.ox = S.oy = 0; applyTransform();
+};
+$('z1').onclick = () => {
+  if (C3.grid) { refit(); $('zlbl').textContent = 'Fit'; return; }
+  S.zoom = 1 / S.fit; S.ox = S.oy = 0; applyTransform();
+};
 $('viewwrap').addEventListener('wheel', e => {
   if (C3.grid && !S.el) {
     e.preventDefault();
-    C3.dist *= e.deltaY < 0 ? 1 / 1.12 : 1.12;
-    C3.camera.position.setZ(C3.dist);
-    renderCube();
+    cubeZoom(e.deltaY < 0 ? 1 / 1.12 : 1.12);
     return;
   }
   if (!S.el) return;

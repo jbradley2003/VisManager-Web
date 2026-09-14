@@ -45,6 +45,7 @@ button.flag{background:var(--flag)}
 button.primary{background:var(--violet)} button.primary:hover{background:#7c3aed}
 button.teal{background:var(--teal)} button.teal:hover{background:#0891b2}
 button.sm{padding:5px 10px;font-size:12px;border-radius:7px}
+img.ico{display:block;flex:0 0 auto;pointer-events:none}
 kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
   font:11px monospace;margin-left:4px}
 
@@ -174,7 +175,7 @@ progress{width:100%;height:8px}
       <span class="s-del" id="sDel">0</span>
       <span class="s-flag" id="sFlag"></span>
       <span class="s-tot" id="sTot"></span>
-      <button id="bKeys" class="sm" title="Edit shortcuts">⌨</button>
+      <button id="bKeys" class="sm" title="Edit shortcuts"></button>
       <button id="bHelp" class="sm">?</button>
       <button id="bExport" class="teal sm" disabled>Export…</button>
     </div>
@@ -189,6 +190,7 @@ progress{width:100%;height:8px}
         <button class="keep sm" id="bKeepAll">Keep all in folder</button>
         <button class="del sm" id="bDelAll">Delete all in folder</button>
         <button class="sm" id="bInvert">Invert folder</button>
+        <button class="sm" id="bDropFolder">Remove folder from review</button>
       </div>
     </div>
     <div id="grip" title="Drag to resize"></div>
@@ -200,11 +202,11 @@ progress{width:100%;height:8px}
       </div>
       <div id="bar"><div></div></div>
       <div id="viewwrap">
-        <div id="view"><div id="placeholder">
+        <div id="stagebox"><div id="view"><div id="placeholder">
           <b>VisManager</b>
           Pick a folder, or drag one onto this window.<br>
           Your files are read as copies and never modified.
-        </div></div>
+        </div></div></div>
         <div id="isobar">
           <span class="hint">Isosurface</span>
           <button class="sm" id="isoDown">−</button>
@@ -238,7 +240,11 @@ progress{width:100%;height:8px}
               <label class="cp-check"><input type="checkbox" id="cpH" checked> H</label>
             </div>
             <label>Surface smoothing <span id="cpSmoothVal" class="val"></span></label>
-            <input type="range" id="cpSmooth" min="0" max="20" value="4">
+            <input type="range" id="cpSmooth" min="0" max="20" value="0">
+            <div class="hint" style="font-size:10px;margin:-2px 0 6px">
+              Off by default: smoothing moves vertices, so the drawn surface no
+              longer sits exactly at the isovalue.
+            </div>
             <label>Bond tolerance <span id="cpTolVal" class="val"></span></label>
             <input type="range" id="cpTol" min="0" max="100" value="45">
             <label>Structure scale <span id="cpScaleVal" class="val"></span></label>
@@ -250,6 +256,19 @@ progress{width:100%;height:8px}
               <input type="color" id="cpBg" value="#0b0712">
               <label class="cp-check"><input type="checkbox" id="cpFlat"> Flat</label>
             </div>
+            <div class="cp-row"><span>Quality</span>
+              <button class="sm" id="gqLow">Low</button>
+              <button class="sm" id="gqMed">Medium</button>
+              <button class="sm" id="gqHigh">High</button>
+              <button class="sm" id="gqUltra">Ultra</button>
+            </div>
+            <label>Brightness <span id="cpBrightVal" class="val"></span></label>
+            <input type="range" id="cpBright" min="30" max="250" value="100">
+            <div class="cp-row">
+              <label class="cp-check"><input type="checkbox" id="cpAA" checked> Antialiasing</label>
+              <label class="cp-check"><input type="checkbox" id="cpTone" checked> Tone mapping</label>
+            </div>
+            <div class="hint" id="gqNote" style="font-size:10px;margin:-2px 0 6px"></div>
             <div class="cp-row"><span>View</span>
               <button class="sm" id="cpFront">Front</button>
               <button class="sm" id="cpSide">Side</button>
@@ -263,34 +282,35 @@ progress{width:100%;height:8px}
           </div>
         </div>
         <div id="imgbar">
-          <button class="sm" id="rotL" title="Rotate left [ ">⟲</button>
-          <button class="sm" id="rotR" title="Rotate right ]">⟳</button>
-          <button class="sm" id="flipH" title="Flip horizontal H">⇄</button>
-          <button class="sm" id="flipV" title="Flip vertical V">⇅</button>
+          <button class="sm" id="rotL" title="Rotate left ["></button>
+          <button class="sm" id="rotR" title="Rotate right ]"></button>
+          <button class="sm" id="flipH" title="Flip horizontal H"></button>
+          <button class="sm" id="flipV" title="Flip vertical V"></button>
           <span id="rotLbl">—</span>
           <button class="sm" id="rotReset" title="Reset R">Reset</button>
         </div>
         <div id="zoombar">
-          <button class="sm" id="zOut">−</button>
+          <button class="sm" id="zOut" title="Zoom out"></button>
           <span id="zlbl">Fit</span>
-          <button class="sm" id="zIn">+</button>
+          <button class="sm" id="zIn" title="Zoom in"></button>
           <button class="sm" id="zFit">Fit</button>
           <button class="sm" id="z1">1:1</button>
-          <button class="sm" id="zFull" title="Fullscreen (F11)">⛶</button>
+          <button class="sm" id="zFull" title="Fullscreen (F11)"></button>
         </div>
       </div>
       <div id="foot">
         <div id="fname"></div>
         <div id="finfo"></div>
         <div id="acts">
-          <button id="bPF">⏮ Folder</button>
-          <button id="bPI">◀ Prev<kbd>←</kbd></button>
+          <button id="bPF" title="Previous folder"></button>
+          <button id="bPI" title="Previous image"><kbd>←</kbd></button>
           <button class="keep" id="bKeep">✓ KEEP<kbd>K</kbd></button>
           <button class="del" id="bDel">✗ DELETE<kbd>D</kbd></button>
-          <button id="bNote">✎ Note<kbd>N</kbd></button>
-          <button id="bFlag">⚐ Flag<kbd>F</kbd></button>
-          <button id="bNI">Next ▶<kbd>→</kbd></button>
-          <button id="bNF">Folder ⏭</button>
+          <button id="bNote">Note<kbd>N</kbd></button>
+          <button id="bFlag">Flag<kbd>F</kbd></button>
+          <button id="bDrop" title="Remove this file from the review">Remove</button>
+          <button id="bNI" title="Next image"><kbd>→</kbd></button>
+          <button id="bNF" title="Next folder"></button>
         </div>
         <div id="state"></div>
         <div id="keys" class="hint">
@@ -332,6 +352,7 @@ progress{width:100%;height:8px}
     <div class="row"><label><input type="checkbox" id="xZip" checked> ZIP of kept files</label></div>
     <div class="row"><label><input type="checkbox" id="xPdf" checked> Combined PDF of kept images</label></div>
     <div class="row"><label><input type="checkbox" id="xPdfEach"> One PDF per folder</label></div>
+    <div class="row"><label><input type="checkbox" id="xPdfFile"> One PDF per file</label></div>
     <div class="row"><label><input type="checkbox" id="xNotes" checked> Notes report (.txt)</label></div>
     <div class="row"><label><input type="checkbox" id="xList" checked> Delete list (.txt)</label></div>
     <div class="hint" id="xSummary"></div>
@@ -381,6 +402,8 @@ progress{width:100%;height:8px}
   <div class="dfoot"><button id="helpClose" class="sm">Close</button></div>
 </dialog>
 
+<script src="icons.js"></script>
+<script src="icons.js"></script>
 <script src="cube.js"></script>
 <script src="app.js"></script>
 </body>

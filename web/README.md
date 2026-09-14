@@ -64,6 +64,15 @@ its travel where nothing changes; the log mapping gives even resolution from
 0.05% to 90% of the peak and means the same thing across files with completely
 different amplitudes.
 
+The viewer draws into a **fixed stage** — a bordered frame inset from the
+panel. Images pan and zoom inside it rather than sliding across the whole
+window, and the keep/delete tint stays outside the frame instead of moving
+with the picture.
+
+On a cube, the rotate/flip/zoom toolbar drives the **camera** rather than the
+bitmap, matching the desktop build: rotate rolls about the view axis, the
+flips are half turns about the vertical and horizontal, and Fit reframes.
+
 Camera framing comes from the bounding sphere of molecule plus isosurface, so
 the subject fills the view instead of floating in empty space.
 
