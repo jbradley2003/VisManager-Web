@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.22.0';
+const BUILD = '1.23.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -37,7 +37,11 @@ const S = {
   notes: new Map(),   // path -> string ("" = flagged, no text)
   enabled: new Set(Object.keys(TYPES)),
   collapsed: new Set(),
+  openFolders: new Set(),   // folders expanded to show their files
+  treeRows: [],             // flat list of what is on screen, for arrow keys
+  treeCursor: -1,
   fi: 0, ii: 0,       // folder index, image index
+  navMode: localStorage.getItem('vm.navMode') || 'continuous',
   zoom: 1, fit: 1, ox: 0, oy: 0, rot: 0, mirror: false,
   url: null, el: null, natural: [0, 0],
   rootName: ''
@@ -124,6 +128,7 @@ const curFile = () => cur()[S.ii];
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
 function drawTree() {
   const tree = $('tree'); tree.innerHTML = '';
+  S.treeRows = [];
   // Group by top-level directory so several dropped folders stay separable.
   const groups = new Map();
   for (const folder of S.folders) {
@@ -139,22 +144,57 @@ function drawTree() {
       const g = document.createElement('div');
       g.className = 'grp';
       g.textContent = `${open ? '▾' : '▸'} ${top}  [${folders.length} folders, ${n} files]`;
-      g.onclick = () => { open ? S.collapsed.add(top) : S.collapsed.delete(top); drawTree(); };
+      g.onclick = () => toggleGroup(top);
       tree.appendChild(g);
+      S.treeRows.push({el: g, kind: 'group', top});
       if (!open) continue;
     }
     for (const folder of folders) {
       const list = S.byFolder.get(folder);
       const keep = list.filter(f => S.state.get(f.path)).length;
       const flags = list.filter(f => S.notes.has(f.path)).length;
+      const open = S.openFolders.has(folder);
       const d = document.createElement('div');
       d.className = 'fld' + (S.folders[S.fi] === folder ? ' on' : '');
-      d.textContent = `${folder.split('/').pop() || folder}  (${keep}/${list.length} ✓)` +
-                      (flags ? `  ⚐${flags}` : '');
+      d.innerHTML =
+        `<span class="tw">${open ? '\u25be' : '\u25b8'}</span>` +
+        `${folder.split('/').pop() || folder}  (${keep}/${list.length} \u2713)` +
+        (flags ? `  \u2690${flags}` : '');
       d.title = folder;
-      d.onclick = () => { S.fi = S.folders.indexOf(folder); S.ii = 0; show(); };
+      d.onclick = e => {
+        // The twisty expands; the rest of the row selects the folder.
+        if (e.target.classList.contains('tw')) {
+          open ? S.openFolders.delete(folder) : S.openFolders.add(folder);
+          drawTree();
+          return;
+        }
+        S.fi = S.folders.indexOf(folder); S.ii = 0; show();
+      };
       d.oncontextmenu = e => { e.preventDefault(); removeFolder(folder); };
       tree.appendChild(d);
+      S.treeRows.push({el: d, kind: 'folder', folder});
+
+      if (open) {
+        list.forEach((f, idx) => {
+          const row = document.createElement('div');
+          const isCur = S.folders[S.fi] === folder && S.ii === idx;
+          row.className = 'fileRow' + (isCur ? ' on' : '');
+          const keptFile = S.state.get(f.path);
+          row.innerHTML =
+            `<span class="mk ${keptFile ? 'k' : 'x'}">${keptFile ? '\u2713' : '\u2717'}</span>` +
+            `${f.name}` + (S.notes.has(f.path) ? ' <span class="fl">\u2690</span>' : '');
+          row.title = f.path;
+          row.onclick = () => {
+            S.fi = S.folders.indexOf(folder); S.ii = idx; show();
+          };
+          row.oncontextmenu = e => {
+            e.preventDefault();
+            if (confirm(`Remove "${f.name}" from the review?`)) removeFile(f.path);
+          };
+          tree.appendChild(row);
+          S.treeRows.push({el: row, kind: 'file', folder, idx, path: f.path});
+        });
+      }
     }
   }
 }
@@ -877,17 +917,35 @@ function showUnsupported(f, why) {
 /* ── Navigation and marking ──────────────────────────────────────────────── */
 function nextImage() {
   const list = cur();
-  if (S.ii < list.length - 1) S.ii++;
+  if (S.ii < list.length - 1) { S.ii++; }
+  else if (S.navMode === 'wrap') { S.ii = 0; }   // stay in this folder
   else { S.fi = (S.fi + 1) % Math.max(1, S.folders.length); S.ii = 0; }
   show();
 }
 function prevImage() {
-  if (S.ii > 0) S.ii--;
+  if (S.ii > 0) { S.ii--; }
+  else if (S.navMode === 'wrap') { S.ii = Math.max(0, cur().length - 1); }
   else {
     S.fi = (S.fi - 1 + S.folders.length) % Math.max(1, S.folders.length);
     S.ii = Math.max(0, cur().length - 1);
   }
   show();
+}
+
+function setNavMode(mode) {
+  S.navMode = mode;
+  localStorage.setItem('vm.navMode', mode);
+  refreshNavModeBtn();
+}
+
+function refreshNavModeBtn() {
+  const b = $('bNavMode');
+  if (!b) return;
+  const wrap = S.navMode === 'wrap';
+  b.textContent = wrap ? 'Wrap in folder' : 'Continuous (all folders)';
+  setBtnIcon('bNavMode', wrap ? 'nav-wrap' : 'nav-cont', 19);
+  b.className = 'sm ' + (wrap ? 'primary' : 'teal');
+  appendKeyCap(b, 'navMode');
 }
 function stepFolder(d) {
   if (!S.folders.length) return;
@@ -1120,6 +1178,8 @@ $('bNI').onclick = nextImage;
 $('bPF').onclick = () => stepFolder(-1);
 $('bNF').onclick = () => stepFolder(1);
 $('bFlag').onclick = toggleFlag;
+$('bNavMode').onclick = () =>
+  setNavMode(S.navMode === 'wrap' ? 'continuous' : 'wrap');
 $('bDrop').onclick = () => {
   const f = curFile();
   if (f && confirm(`Remove "${f.name}" from the review?\n\n` +
@@ -1351,6 +1411,8 @@ console.log(`VisManager Web build ${BUILD}`);
 /* Apply the supplied icon set to the buttons. Done in JS rather than inline
  * markup so the base64 payload lives in one file. */
 (function applyIcons() {
+  const logo = document.getElementById('logo');
+  if (logo && ICONS.logo64) logo.src = ICONS.logo64;
   const map = {
     bPF: 'folder-prev', bPI: 'file-prev', bNI: 'file-next', bNF: 'folder-next',
     bNote: 'pencil', bFlag: 'flag', bOpen: 'folder', bKeys: 'keyboard',
@@ -1382,6 +1444,59 @@ window.addEventListener('resize', layoutOverlays);
 $('addAppend').onclick = () => { $('dAdd').close(); ingestNow(pendingFiles, true); };
 $('addReplace').onclick = () => { $('dAdd').close(); ingestNow(pendingFiles, false); };
 $('addCancel').onclick = () => { $('dAdd').close(); pendingFiles = null; };
+
+/**
+ * Arrow-key navigation inside the folder list.
+ *
+ * Scoped to the sidebar having focus, so the same arrow keys keep stepping
+ * through images when the viewer is in use.
+ */
+function moveTreeCursor(delta) {
+  const rows = S.treeRows;
+  if (!rows.length) return;
+  let i = S.treeCursor;
+  if (i < 0) i = rows.findIndex(r => r.el.classList.contains('on'));
+  i = Math.max(0, Math.min(rows.length - 1, (i < 0 ? 0 : i) + delta));
+  S.treeCursor = i;
+  for (const r of rows) r.el.classList.remove('cursor');
+  const row = rows[i];
+  row.el.classList.add('cursor');
+  // Guarded: not every embedding provides it, and a missing scroll helper
+  // should never break keyboard navigation.
+  if (row.el.scrollIntoView) row.el.scrollIntoView({block: 'nearest'});
+}
+
+function activateTreeCursor() {
+  const row = S.treeRows[S.treeCursor];
+  if (!row) return;
+  if (row.kind === 'group') { toggleGroup(row.top); return; }
+  if (row.kind === 'folder') {
+    S.openFolders.has(row.folder) ? S.openFolders.delete(row.folder)
+                                  : S.openFolders.add(row.folder);
+    S.fi = S.folders.indexOf(row.folder); S.ii = 0;
+    drawTree(); show();
+    return;
+  }
+  S.fi = S.folders.indexOf(row.folder); S.ii = row.idx; show();
+}
+
+$('tree').addEventListener('keydown', e => {
+  const map = {ArrowDown: 1, ArrowUp: -1, PageDown: 8, PageUp: -8};
+  if (map[e.key] !== undefined) { e.preventDefault(); moveTreeCursor(map[e.key]); }
+  else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activateTreeCursor(); }
+  else if (e.key === 'ArrowRight') {
+    const r = S.treeRows[S.treeCursor];
+    if (r && r.kind === 'folder') { e.preventDefault(); S.openFolders.add(r.folder); drawTree(); }
+  } else if (e.key === 'ArrowLeft') {
+    const r = S.treeRows[S.treeCursor];
+    if (r && r.kind === 'folder') { e.preventDefault(); S.openFolders.delete(r.folder); drawTree(); }
+  }
+});
+
+function toggleGroup(top) {
+  S.collapsed.has(top) ? S.collapsed.delete(top) : S.collapsed.add(top);
+  drawTree();
+}
 
 /* Sidebar resizing. Width is remembered so the layout survives a reload. */
 (function () {
@@ -1444,6 +1559,63 @@ $('cpTol').oninput = e => {
   $('cpTolVal').textContent = '+' + C3.bondTol.toFixed(2) + ' A';
 };
 $('cpTol').onchange = () => rebuildMolecule();
+
+/* Expand to window: hide the chrome and give the stage the whole window.
+ * Distinct from fullscreen, which takes over the display. */
+function toggleExpanded() {
+  const on = !document.body.classList.contains('expanded');
+  document.body.classList.toggle('expanded', on);
+  $('zExpand').textContent = on ? 'Restore' : 'Expand';
+  setTimeout(() => {
+    layoutOverlays();
+    if (S.el) { S.fit = computeFit(); applyTransform(); }
+    if (C3.grid) {
+      const wrap = $('stagebox');
+      C3.renderer.setSize(wrap.clientWidth, wrap.clientHeight, true);
+      C3.camera.aspect = wrap.clientWidth / Math.max(1, wrap.clientHeight);
+      C3.camera.updateProjectionMatrix();
+      renderCube();
+    }
+  }, 50);
+}
+$('zExpand').onclick = toggleExpanded;
+
+/* Panel dragging and resizing. The settings panel covers the model, so being
+ * able to move it out of the way matters more than it would for a dialog. */
+(function panelChrome() {
+  const panel = $('cubePanel'), head = $('cpDrag'), grip = $('cpGrip');
+  let mode = null, sx = 0, sy = 0, sl = 0, st = 0, sw = 0, sh = 0;
+  const begin = (kind, e) => {
+    mode = kind;
+    const r = panel.getBoundingClientRect();
+    const host = $('viewwrap').getBoundingClientRect();
+    sx = e.clientX; sy = e.clientY;
+    sl = r.left - host.left; st = r.top - host.top;
+    sw = r.width; sh = r.height;
+    e.preventDefault();
+    e.target.setPointerCapture(e.pointerId);
+  };
+  head.addEventListener('pointerdown', e => {
+    if (e.target.tagName !== 'BUTTON') begin('move', e);
+  });
+  grip.addEventListener('pointerdown', e => begin('size', e));
+  const move = e => {
+    if (!mode) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (mode === 'move') {
+      panel.style.left = Math.max(0, sl + dx) + 'px';
+      panel.style.top = Math.max(0, st + dy) + 'px';
+    } else {
+      panel.style.width = Math.max(240, sw + dx) + 'px';
+      panel.style.height = Math.max(200, sh + dy) + 'px';
+    }
+  };
+  head.addEventListener('pointermove', move);
+  grip.addEventListener('pointermove', move);
+  const end = () => { mode = null; };
+  head.addEventListener('pointerup', end);
+  grip.addEventListener('pointerup', end);
+})();
 
 /* Fullscreen — requested on the view area so the overlaid isosurface bar,
  * settings panel and zoom controls stay usable. Requesting it on the whole
@@ -1554,6 +1726,9 @@ const ACTIONS = [
   ['zoomFit',  'Zoom to fit',         '0'],
   ['iso',      '3D settings',         'i'],
   ['full',     'Fullscreen',          'f11'],
+  ['navMode',  'Continuous / wrap',   'w'],
+  ['remove',   'Remove from review',  'x'],
+  ['expandWin','Expand to window',    'e'],
 ];
 const DEFAULT_KEYS = Object.fromEntries(ACTIONS.map(([id, , k]) => [id, k]));
 
@@ -1579,7 +1754,62 @@ const HANDLERS = {
   zoomFit: () => $('zFit').click(),
   iso: () => { if (C3.grid) $('isoMore').click(); },
   full: toggleFullscreen,
+  navMode: () => setNavMode(S.navMode === 'wrap' ? 'continuous' : 'wrap'),
+  remove: () => $('bDrop').click(),
+  expandWin: () => toggleExpanded(),
 };
+
+/**
+ * Show a button's shortcut, either inline or as a caption underneath.
+ *
+ * Captions are regenerated from KEYS rather than written into the markup, so
+ * rebinding a key updates every button that mentions it. Buttons that already
+ * print their key inline (a <kbd> in the label) are left alone.
+ */
+function appendKeyCap(btn, action) {
+  if (!btn) return;
+  const key = KEYS[action];
+  let cap = btn.querySelector('.kcap');
+  if (!key) { if (cap) cap.remove(); return; }
+  if (!cap) {
+    cap = document.createElement('span');
+    cap.className = 'kcap';
+    btn.appendChild(cap);
+  }
+  cap.textContent = prettyKey(key);
+}
+
+/** Refresh every shortcut indicator after a rebind. */
+function refreshKeyCaps() {
+  const inline = {bKeep: 'keep', bDel: 'delete', bNote: 'note', bFlag: 'flag',
+                  bPI: 'prev', bNI: 'next'};
+  for (const [id, action] of Object.entries(inline)) {
+    const btn = $(id);
+    if (!btn) continue;
+    const kbd = btn.querySelector('kbd');
+    if (kbd) kbd.textContent = prettyKey(KEYS[action]);
+    else appendKeyCap(btn, action);
+  }
+  // Buttons with room but no inline key
+  for (const [id, action] of [['bPF', 'prevFold'], ['bNF', 'nextFold'],
+                              ['rotL', 'rotL'], ['rotR', 'rotR'],
+                              ['flipH', 'flipH'], ['flipV', 'flipV'],
+                              ['rotReset', 'resetRot'], ['zIn', 'zoomIn'],
+                              ['zOut', 'zoomOut'], ['zFit', 'zoomFit'],
+                              ['zFull', 'full'], ['bDrop', 'remove'],
+                              ['isoMore', 'iso']]) {
+    appendKeyCap($(id), action);
+  }
+  refreshNavModeBtn();
+  const strip = $('keys');
+  if (strip) {
+    strip.innerHTML = ACTIONS
+      .filter(([id]) => KEYS[id])
+      .map(([id, label]) =>
+        `<span><kbd>${prettyKey(KEYS[id])}</kbd> ${label.toLowerCase()}</span>`)
+      .join('');
+  }
+}
 
 const prettyKey = k => ({' ': 'Space', 'arrowleft': '←', 'arrowright': '→',
   'arrowup': '↑', 'arrowdown': '↓', 'escape': 'Esc', 'f11': 'F11'}[k] ||
@@ -1627,6 +1857,7 @@ $('dKeys').addEventListener('keydown', e => {
   capturing.btn.classList.remove('listening');
   capturing = null;
   buildKeyRows();
+  refreshKeyCaps();
   $('keyMsg').textContent = stolenFrom
     ? `Taken from "${ACTIONS.find(a => a[0] === stolenFrom)[1]}".` : '';
 });
@@ -1634,7 +1865,7 @@ $('dKeys').addEventListener('keydown', e => {
 $('bKeys').onclick = () => { buildKeyRows(); $('keyMsg').textContent = ''; $('dKeys').showModal(); };
 $('keysClose').onclick = () => $('dKeys').close();
 $('keysReset').onclick = () => {
-  KEYS = {...DEFAULT_KEYS}; saveKeys(); buildKeyRows();
+  KEYS = {...DEFAULT_KEYS}; saveKeys(); buildKeyRows(); refreshKeyCaps();
   $('keyMsg').textContent = 'Defaults restored.';
 };
 
@@ -1703,3 +1934,10 @@ function walk(entry, prefix, out) {
     } else resolve();
   });
 }
+
+/* Final wiring. KEYS and ACTIONS are const bindings declared above this
+ * point; calling into them any earlier hits the temporal dead zone and the
+ * ReferenceError aborts the rest of the script. */
+refreshKeyCaps();
+refreshNavModeBtn();
+layoutOverlays();

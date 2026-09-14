@@ -19,17 +19,20 @@ w.URL.revokeObjectURL = () => {};
 w.HTMLCanvasElement.prototype.getContext = () => null;
 w.matchMedia = () => ({matches: false, addListener(){}, removeListener(){}});
 
-for (const file of ['icons.js', 'cube.js', 'app.js']) {
-  try {
-    w.eval(fs.readFileSync(path + file, 'utf8'));
-    console.log(`  ${file.padEnd(10)} loaded OK`);
-  } catch (err) {
-    console.log(`  ${file.padEnd(10)} THREW: ${err.name}: ${err.message}`);
-    const line = (err.stack || '').split('\n').find(l => l.includes('evalmachine'));
-    if (line) console.log(`             at ${line.trim()}`);
-    errors.push(file + ': ' + err.message);
-  }
+// Load the three files in ONE evaluation, exactly as a browser does with
+// successive <script> tags sharing a global scope. Evaluating them separately
+// puts each file's top-level `const` in its own scope, so app.js cannot see
+// icons.js and the run fails in a way the browser never would.
+const sources = ['icons.js', 'cube.js', 'app.js']
+  .map(f => `/* ${f} */\n` + fs.readFileSync(path + f, 'utf8'));
+try {
+  w.eval(sources.join('\n;\n'));
+  console.log('  all scripts loaded OK');
+} catch (err) {
+  console.log(`  THREW: ${err.name}: ${err.message}`);
+  errors.push(err.message);
 }
+
 console.log();
 console.log('runtime errors:', errors.length ? errors : 'none');
 

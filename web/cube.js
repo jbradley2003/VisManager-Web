@@ -82,18 +82,18 @@ function parseCube(text) {
  * describe the orbital, so any fraction of the peak renders as a speck. Using
  * the level that encloses a share of the grid volume adapts to the data.
  */
-function chooseIsovalue(values, volumeFraction = 0.12) {
-  const mag = [];
+function chooseIsovalue(values, fraction = 0.05) {
+  // A fixed share of the peak amplitude. This is what VMD/VESTA workflows use
+  // (ISO_FRACTION), and it means the same thing across calculations whose
+  // absolute amplitudes differ by orders of magnitude.
+  let peak = 0;
   for (let i = 0; i < values.length; i++) {
     const v = Math.abs(values[i]);
-    if (v > 0) mag.push(v);
+    if (v > peak) peak = v;
   }
-  if (!mag.length) return 0;
-  mag.sort((a, b) => a - b);
-  const idx = Math.floor((1 - volumeFraction) * (mag.length - 1));
-  const q = mag[idx], peak = mag[mag.length - 1];
-  return Math.max(Math.min(q, peak * 0.5), peak * 1e-4);
+  return peak * fraction;
 }
+
 
 /**
  * Reduce a large grid by striding.

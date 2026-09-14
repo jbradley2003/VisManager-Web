@@ -48,17 +48,36 @@ button.sm{padding:5px 10px;font-size:12px;border-radius:7px}
 img.ico{display:block;flex:0 0 auto;pointer-events:none}
 kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
   font:11px monospace;margin-left:4px}
+/* Shortcut caption under a button whose label has no room for one inline */
+.kcap{position:absolute;left:0;right:0;bottom:-14px;font:10px monospace;
+  color:var(--muted);text-align:center;pointer-events:none}
+#acts button,#imgbar button,#zoombar button,#isobar button,#modebar button{
+  position:relative}
+#acts{margin-bottom:14px}
+#imgbar,#zoombar{padding-bottom:16px}
 
 /* Clamp to the viewport. A flex child defaults to min-width:auto, so a wide
    footer (the shortcut strip and button row) can force #main wider than the
    window; the sidebar then sits partly off the left edge. */
 #app{display:flex;flex-direction:column;height:100%;width:100%;
   max-width:100vw;overflow:hidden}
-#toolbar{display:flex;align-items:center;gap:10px;padding:8px 14px;
-  background:var(--bg-mid);flex-wrap:wrap;min-width:0}
-#brand{font-size:17px;font-weight:800;letter-spacing:-.3px}
+/* Three groups, evenly spread: brand+open on the left, the counts in the
+   middle, the action buttons on the right. */
+#toolbar{display:flex;align-items:center;gap:12px;padding:8px 16px;
+  background:var(--bg-mid);flex-wrap:wrap;min-width:0;
+  justify-content:space-between}
+#stats{display:flex;gap:16px;align-items:center;font-weight:700;
+  margin-left:0}
+#brand{font-size:17px;font-weight:800;letter-spacing:-.3px;display:flex;
+  align-items:center;gap:8px}
+#logo{display:block;flex-shrink:0}
+#tbspace{flex:1}
+/* The four icon buttons carry meaning only through their glyphs, so they get
+   a larger hit area and a larger icon than the compact .sm buttons. */
+button.big{padding:11px 16px;font-size:14px;border-radius:10px}
+button.big img{width:21px;height:21px}
 #brand span{color:var(--accent)}
-#stats{margin-left:auto;display:flex;gap:14px;align-items:center;font-weight:700}
+
 .s-keep{color:var(--keep-hi)} .s-del{color:var(--del-hi)}
 .s-flag{color:var(--flag-text)} .s-tot{color:var(--muted);font-weight:400}
 
@@ -78,6 +97,17 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fld:hover{background:rgba(255,255,255,.05)}
 .fld.on{background:var(--accent);color:#fff}
+.tw{display:inline-block;width:14px;color:var(--muted);cursor:pointer}
+.fld.on .tw{color:#fff}
+.fileRow{padding:3px 6px 3px 34px;border-radius:6px;cursor:pointer;font-size:12px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.fileRow:hover{background:rgba(255,255,255,.05)}
+.fileRow.on{background:rgba(79,142,247,.28);color:var(--text)}
+.mk{display:inline-block;width:14px;font-weight:700}
+.mk.k{color:var(--keep-hi)} .mk.x{color:var(--del-hi)}
+.fl{color:var(--flag-text)}
+.cursor{outline:2px solid var(--flag-text);outline-offset:-2px}
+#tree:focus{outline:none;box-shadow:inset 0 0 0 2px rgba(79,142,247,.35)}
 #types{padding:6px 10px 10px;border-top:1px solid var(--border)}
 .chip{display:inline-flex;gap:5px;align-items:center;background:#2f4858;
   border-radius:6px;padding:4px 9px;margin:3px 3px 0 0;font-size:12px;
@@ -128,14 +158,30 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
   color:var(--flag-text)}
 /* Sits below the bar row; its top is set from the measured row height so it
    is never covered, however the bars wrap. */
-#cubePanel{position:absolute;top:60px;left:10px;width:290px;display:none;
-  z-index:25;
+#cubePanel{position:absolute;top:60px;left:10px;width:300px;height:420px;
+  min-width:240px;min-height:200px;max-width:90vw;max-height:88vh;
+  display:none;flex-direction:column;z-index:25;
   background:rgba(26,26,40,.96);border:1px solid var(--border);
   border-radius:12px;z-index:20;font-size:12px}
-#cubePanel.on{display:block}
+#cubePanel.on{display:flex}
 .cp-head{display:flex;align-items:center;justify-content:space-between;
   padding:9px 12px;border-bottom:1px solid var(--border)}
-.cp-body{padding:10px 12px;max-height:62vh;overflow:auto}
+/* A permanent scrollbar. macOS hides overlay scrollbars until you scroll, so
+   there is no sign the panel has more content below the fold. */
+.cp-body{padding:10px 12px;overflow-y:scroll;overflow-x:hidden;
+  scrollbar-gutter:stable;scrollbar-width:thin;
+  scrollbar-color:var(--accent) var(--bg-mid);flex:1;min-height:0}
+.cp-body::-webkit-scrollbar{width:11px}
+.cp-body::-webkit-scrollbar-track{background:var(--bg-mid);border-radius:6px}
+.cp-body::-webkit-scrollbar-thumb{background:#5a6a9a;border-radius:6px;
+  border:2px solid var(--bg-mid)}
+.cp-body::-webkit-scrollbar-thumb:hover{background:var(--accent)}
+#cpDrag{cursor:move;user-select:none}
+#cpGrip{position:absolute;right:2px;bottom:2px;width:16px;height:16px;
+  cursor:nwse-resize;
+  background:linear-gradient(135deg,transparent 50%,var(--border) 50%,
+    var(--border) 60%,transparent 60%,transparent 72%,var(--border) 72%,
+    var(--border) 82%,transparent 82%)}
 .cp-body label{display:block;margin:9px 0 3px;color:var(--muted)}
 .cp-body input[type=range]{width:100%}
 .cp-row{display:flex;align-items:center;gap:8px;margin:9px 0;flex-wrap:wrap;
@@ -161,6 +207,7 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
 #finfo{text-align:center;font-size:12px;color:var(--muted)}
 #note{text-align:center;font-size:12px;color:var(--flag-text);min-height:17px}
 #acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
+#modebar{display:flex;justify-content:center;margin-top:6px}
 #state{text-align:center;font-weight:700;margin-top:5px}
 #keys{text-align:center;margin-top:6px;font-size:11px;opacity:.75;
   display:flex;flex-wrap:wrap;gap:4px 10px;justify-content:center}
@@ -179,6 +226,10 @@ dialog h2{margin:0;padding:14px 20px;background:var(--bg-mid);font-size:17px}
 textarea{width:100%;min-height:120px;background:var(--bg-mid);color:var(--text);
   border:1px solid var(--border);border-radius:8px;padding:9px;font:inherit;
   resize:vertical}
+/* Expanded: the viewer takes the whole window. */
+body.expanded #side, body.expanded #grip, body.expanded #toolbar,
+body.expanded #head, body.expanded #bar{display:none}
+body.expanded #foot{padding:4px 10px}
 #drop{position:fixed;inset:0;background:rgba(79,142,247,.18);
   border:3px dashed var(--accent);display:none;align-items:center;
   justify-content:center;font-size:26px;font-weight:800;z-index:50}
@@ -192,27 +243,29 @@ progress{width:100%;height:8px}
 <div id="app">
   <div id="toolbar">
     <div id="brand" title="build">
+      <img id="logo" alt="" width="28" height="28">
       <span>Vis</span>Manager
       <span style="font-size:11px;color:var(--muted)">web</span>
       <span id="ver" style="font-size:10px;color:var(--muted)"></span>
     </div>
-    <button id="bOpen" class="primary">Open folder</button>
+    <button id="bOpen" class="primary big">Open folder</button>
     <span id="dirname" class="hint">no folder loaded</span>
+    <div id="tbspace"></div>
     <div id="stats">
       <span class="s-keep" id="sKeep">0</span>
       <span class="s-del" id="sDel">0</span>
       <span class="s-flag" id="sFlag"></span>
       <span class="s-tot" id="sTot"></span>
-      <button id="bKeys" class="sm" title="Edit shortcuts"></button>
-      <button id="bHelp" class="sm">?</button>
-      <button id="bExport" class="teal sm" disabled>Export…</button>
+      <button id="bKeys" class="big" title="Edit shortcuts (click to rebind)"></button>
+      <button id="bHelp" class="big" title="Help">?</button>
+      <button id="bExport" class="teal big" disabled title="Export…">Export…</button>
     </div>
   </div>
 
   <div id="main">
     <div id="side">
       <h3>Folders</h3>
-      <div id="tree"></div>
+      <div id="tree" tabindex="0"></div>
       <div id="types"><h3 style="margin-left:0">File types</h3><div id="chips"></div></div>
       <div id="bulk">
         <button class="keep sm" id="bKeepAll">Keep all in folder</button>
@@ -259,12 +312,14 @@ progress{width:100%;height:8px}
           <button class="sm" id="zIn" title="Zoom in"></button>
           <button class="sm" id="zFit">Fit</button>
           <button class="sm" id="z1">1:1</button>
+          <button class="sm" id="zExpand" title="Expand to window">Expand</button>
           <button class="sm" id="zFull" title="Fullscreen (F11)"></button>
         </div>
         </div>
         <div id="cubePanel">
-          <div class="cp-head">
+          <div class="cp-head" id="cpDrag">
             <b>Isosurface</b>
+            <span style="flex:1"></span>
             <button class="sm" id="cpClose">✕</button>
           </div>
           <div class="cp-body">
@@ -326,6 +381,8 @@ progress{width:100%;height:8px}
               <button class="sm" id="cpReset">Reset</button>
             </div>
           </div>
+          <div id="cpGrip" title="Drag to resize"></div>
+          </div>
         </div>
 
       </div>
@@ -342,6 +399,9 @@ progress{width:100%;height:8px}
           <button id="bDrop" title="Remove this file from the review">Remove</button>
           <button id="bNI" title="Next image"><kbd>→</kbd></button>
           <button id="bNF" title="Next folder"></button>
+        </div>
+        <div id="modebar">
+          <button id="bNavMode" class="sm teal"></button>
         </div>
         <div id="state"></div>
         <div id="keys" class="hint">
