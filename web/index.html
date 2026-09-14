@@ -139,6 +139,16 @@ button.big img{width:21px;height:21px}
 #view{position:absolute;inset:0;cursor:grab}
 /* Crisp 1px outline tracking the image bounds. Drawn as its own element
    because a border on the image would be scaled by the zoom transform. */
+#stageGrip{position:absolute;right:0;bottom:0;width:18px;height:18px;z-index:30;
+  cursor:nwse-resize;
+  background:linear-gradient(135deg,transparent 45%,var(--border) 45%,
+    var(--border) 56%,transparent 56%,transparent 68%,var(--border) 68%,
+    var(--border) 79%,transparent 79%)}
+/* One line when the viewer owns the window: the bars have room, and wrapping
+   would push the stage down for no reason. */
+#topbars.flat{flex-wrap:nowrap;overflow-x:auto;gap:6px}
+#topbars.flat button{padding:4px 8px;font-size:12px}
+#topbars.flat #isoSlide{width:90px}
 #imgframe{position:absolute;pointer-events:none;display:none;
   border:1px solid rgba(255,255,255,.32);
   box-shadow:0 0 0 1px rgba(0,0,0,.55), 0 4px 20px rgba(0,0,0,.5)}
@@ -290,7 +300,7 @@ progress{width:100%;height:8px}
       </div>
       <div id="bar"><div></div></div>
       <div id="viewwrap">
-        <div id="stagebox"><div id="imgframe"></div><div id="view"><div id="placeholder">
+        <div id="stagebox"><div id="imgframe"></div><div id="stageGrip" title="Drag to resize the stage"></div><div id="view"><div id="placeholder">
           <b>VisManager</b>
           Pick a folder, or drag one onto this window.<br>
           Your files are read as copies and never modified.

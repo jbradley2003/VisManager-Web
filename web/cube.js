@@ -40,10 +40,19 @@ function parseCube(text) {
     axes.push([+row[1], +row[2], +row[3]]);
   }
 
+  // Pull numbers out by pattern rather than splitting on whitespace. Several
+  // writers emit fixed-width columns (%5d%12.6f...), and a coordinate wide
+  // enough to fill its field runs straight into the next one — whitespace
+  // splitting then yields the wrong number of tokens and the atom is dropped
+  // or mis-parsed.
+  const NUM = /-?\d+(?:\.\d*)?(?:[eEdD][+-]?\d+)?/g;
+  const numsOf = line => (line.match(NUM) || []).map(t => +t.replace(/[dD]/, 'e'));
+
   const atoms = [];
   for (let i = 0; i < nAtoms; i++) {
-    const row = lines[li++].trim().split(/\s+/);
-    atoms.push({z: parseInt(row[0], 10), x: +row[2], y: +row[3], zc: +row[4]});
+    const v = numsOf(lines[li++] || '');
+    if (v.length < 5) continue;            // malformed line, skip rather than NaN
+    atoms.push({z: Math.round(v[0]), x: v[2], y: v[3], zc: v[4]});
   }
   if (parseInt(head[0], 10) < 0) li++;         // orbital index line
 
@@ -66,12 +75,78 @@ function parseCube(text) {
     }
   }
 
+  normaliseScale(atoms, origin, spacing);
+
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < total; i++) {
     if (values[i] < lo) lo = values[i];
     if (values[i] > hi) hi = values[i];
   }
   return {atoms, origin: org, spacing, dims, values, range: [lo, hi]};
+}
+
+/**
+ * Correct an implausible coordinate scale.
+ *
+ * The units flag is not always trustworthy: some writers emit Angstrom
+ * coordinates while still declaring a positive atom count (which the format
+ * says means Bohr), and the reverse happens too. Either way every interatomic
+ * distance ends up wrong by a factor of 1.89, and bond detection — which
+ * works in absolute Angstrom — silently finds nothing.
+ *
+ * Real covalent bonds run roughly 0.9 to 2.4 A, so the median nearest
+ * neighbour distance is a reliable tell. Atoms, origin and spacing are scaled
+ * together, so the isosurface stays aligned with the molecule.
+ */
+function normaliseScale(atoms, origin, spacing) {
+  if (atoms.length < 2) return 1;
+
+  const nn = [];
+  for (let i = 0; i < atoms.length; i++) {
+    let best = Infinity;
+    for (let j = 0; j < atoms.length; j++) {
+      if (i === j) continue;
+      const a = atoms[i], b = atoms[j];
+      const d = Math.hypot(a.x - b.x, a.y - b.y, a.zc - b.zc);
+      if (d > 1e-6 && d < best) best = d;
+    }
+    if (isFinite(best)) nn.push(best);
+  }
+  if (!nn.length) return 1;
+  nn.sort((a, b) => a - b);
+  const median = nn[Math.floor(nn.length / 2)];
+
+  // Hydrogen is the sharpest ruler available. An X-H bond is 0.9 to 1.2 A in
+  // every ordinary structure, so if the closest neighbour of a hydrogen is far
+  // from that, the whole file is on the wrong scale. Metal-ligand distances
+  // reach 2.4 A legitimately, which is why the median alone cannot separate a
+  // real coordination complex from a mis-scaled organic molecule.
+  let hMin = Infinity;
+  for (let i = 0; i < atoms.length; i++) {
+    if (atoms[i].z !== 1) continue;
+    for (let j = 0; j < atoms.length; j++) {
+      if (i === j || atoms[j].z === 1) continue;
+      const a = atoms[i], b = atoms[j];
+      const d = Math.hypot(a.x - b.x, a.y - b.y, a.zc - b.zc);
+      if (d > 1e-6 && d < hMin) hMin = d;
+    }
+  }
+
+  let factor = 1;
+  if (isFinite(hMin)) {
+    if (hMin < 0.7) factor = 1 / BOHR_TO_ANGSTROM;      // too short: was Angstrom
+    else if (hMin > 1.5) factor = BOHR_TO_ANGSTROM;     // too long: was Bohr
+  } else {
+    // No hydrogens; fall back to the median, with bounds wide enough to leave
+    // genuine metal-ligand distances alone.
+    if (median < 0.75) factor = 1 / BOHR_TO_ANGSTROM;
+    else if (median > 3.2) factor = BOHR_TO_ANGSTROM;
+  }
+  if (factor === 1) return 1;
+
+  for (const a of atoms) { a.x *= factor; a.y *= factor; a.zc *= factor; }
+  for (let i = 0; i < 3; i++) { origin[i] *= factor; spacing[i] *= factor; }
+  return factor;
 }
 
 /**
@@ -436,11 +511,13 @@ function inferBonds(atoms, tolerance = 0.45) {
 
 if (typeof window !== 'undefined') {
   window.CubeLib = {parseCube, chooseIsovalue, isosurface, inferBonds, downsample,
+                    normaliseScale,
                     weld, smoothMesh, recomputeNormals,
                     symbolOf, colorOf, radiusOf, BOHR_TO_ANGSTROM};
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {parseCube, chooseIsovalue, isosurface, inferBonds, downsample,
+                    normaliseScale,
                     weld, smoothMesh, recomputeNormals,
                     symbolOf, colorOf, radiusOf, BOHR_TO_ANGSTROM};
 }

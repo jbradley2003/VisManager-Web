@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.25.0';
+const BUILD = '1.26.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -267,6 +267,10 @@ async function show() {
   // zoom handler branches on it. It used to persist after navigating away, so
   // once any cube had been opened those controls drove an invisible camera
   // instead of the image. Clear it here; showCube sets it again.
+  // Decoding a PDF page or extracting a cube surface takes a few hundred
+  // milliseconds. Showing nothing for that long reads as a stall, so put a
+  // marker up immediately; swapIn() replaces it when the content is ready.
+  showBusy(f);
   C3.grid = null;
   showIsoControls(false);
   $('cubePanel').classList.remove('on');
@@ -301,8 +305,26 @@ function place(el, w, h) {
   swapIn(el);
   $('finfo').textContent = `${f_info()} │ ${w} × ${h}`;
 }
+let busyTimer = null;
+function showBusy(f) {
+  clearTimeout(busyTimer);
+  // Only announce slow formats, and only if they are actually slow — a small
+  // PNG decodes faster than the message would be readable.
+  if (!f || !['pdf', 'cube'].includes(f.type)) return;
+  busyTimer = setTimeout(() => {
+    const el = document.createElement('div');
+    el.id = 'placeholder';
+    el.innerHTML = `<b>${f.type.toUpperCase()}</b>${f.name}<br><br>` +
+      `<span class="hint">${f.type === 'cube'
+        ? 'Reading grid and extracting the isosurface…'
+        : 'Rendering page…'}</span>`;
+    $('view').replaceChildren(el);
+  }, 90);
+}
+
 /** Replace the view contents in one step, so nothing blanks in between. */
 function swapIn(el) {
+  clearTimeout(busyTimer);
   const view = $('view');
   view.replaceChildren(el);
   if (S.pendingRevoke) {
@@ -484,9 +506,6 @@ async function showCube(f) {
     return;
   }
 
-  $('view').replaceChildren(
-    Object.assign(document.createElement('div'),
-                  {id: 'placeholder', textContent: 'Reading cube…'}));
   await new Promise(r => setTimeout(r, 0));       // let the message paint
   const text = await f.file.text();
   const full = CubeLib.parseCube(text);
@@ -1517,6 +1536,53 @@ function toggleGroup(top) {
   drawTree();
 }
 
+/**
+ * Let the stage be resized.
+ *
+ * Shrinking it gives the controls a narrower row to lay out in, which is what
+ * makes them collapse onto a single line; growing it maximises the picture.
+ */
+(function stageResize() {
+  const grip = $('stageGrip'), stage = $('stagebox');
+  if (!grip) return;
+  const saved = JSON.parse(localStorage.getItem('vm.stage') || 'null');
+  if (saved) { stage.style.right = saved.r + 'px'; stage.style.bottom = saved.b + 'px'; }
+  let drag = null;
+  grip.addEventListener('pointerdown', e => {
+    const host = $('viewwrap').getBoundingClientRect();
+    const r = stage.getBoundingClientRect();
+    drag = {x: e.clientX, y: e.clientY,
+            right: host.right - r.right, bottom: host.bottom - r.bottom};
+    grip.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const right = Math.max(0, drag.right - (e.clientX - drag.x));
+    const bottom = Math.max(0, drag.bottom - (e.clientY - drag.y));
+    stage.style.right = right + 'px';
+    stage.style.bottom = bottom + 'px';
+    if (S.el) { S.fit = computeFit(); applyTransform(); }
+  });
+  grip.addEventListener('pointerup', () => {
+    if (!drag) return;
+    drag = null;
+    localStorage.setItem('vm.stage', JSON.stringify({
+      r: parseInt(stage.style.right, 10) || 14,
+      b: parseInt(stage.style.bottom, 10) || 14,
+    }));
+    if (C3.grid) refit();
+    if (C3.renderer) {
+      C3.renderer.setSize(stage.clientWidth, stage.clientHeight, true);
+      if (C3.camera) {
+        C3.camera.aspect = stage.clientWidth / Math.max(1, stage.clientHeight);
+        C3.camera.updateProjectionMatrix();
+      }
+      renderCube();
+    }
+  });
+})();
+
 /* Sidebar resizing. Width is remembered so the layout survives a reload. */
 (function () {
   const grip = $('grip'), side = $('side');
@@ -1584,6 +1650,7 @@ $('cpTol').onchange = () => rebuildMolecule();
 function toggleExpanded() {
   const on = !document.body.classList.contains('expanded');
   document.body.classList.toggle('expanded', on);
+  $('topbars').classList.toggle('flat', on);
   $('zExpand').textContent = on ? 'Restore' : 'Expand';
   setTimeout(() => {
     layoutOverlays();
@@ -1651,6 +1718,7 @@ function toggleFullscreen() {
 $('zFull').onclick = toggleFullscreen;
 document.addEventListener('fullscreenchange', () => {
   const on = !!document.fullscreenElement;
+  $('topbars').classList.toggle('flat', on || document.body.classList.contains('expanded'));
   setBtnIcon('zFull', 'corners');
   // The canvas has a fixed pixel size, so it must be resized to the new box
   setTimeout(() => {
