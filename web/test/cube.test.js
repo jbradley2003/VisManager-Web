@@ -113,6 +113,78 @@ console.log('ingested cube files:', api.S.files.length);
     console.log('showCube THREW:', err.message);
     console.log((err.stack||'').split('\n').slice(1,3).join('\n'));
   }
+  // Writer-variant coverage: the units flag is not always honoured, and some
+  // writers emit fixed-width columns with no separators.
+  console.log('\n=== Parser robustness across writer variants ===');
+  const CL = w.eval('CubeLib');
+  const BOHR2 = 0.529177210903;
+  const mkText = (coordScale, sign, atomList, wide) => {
+    const nn = 8, lo = -8, st = 16/(nn-1), gs = sign < 0 ? 1 : 1/BOHR2;
+    let o = 'c\nMO\n';
+    o += `${String(atomList.length*sign).padStart(5)} ${(lo*gs).toFixed(6)} ${(lo*gs).toFixed(6)} ${(lo*gs).toFixed(6)}\n`;
+    for (let a=0;a<3;a++){const v=[0,0,0];v[a]=st*gs;
+      o += ` ${String(nn).padStart(4)} ${v[0].toFixed(6)} ${v[1].toFixed(6)} ${v[2].toFixed(6)}\n`;}
+    for (const [z,x,y,zz] of atomList) {
+      const X=x*coordScale, Y=y*coordScale, Z=zz*coordScale;
+      o += wide
+        ? `${String(z).padStart(5)}${z.toFixed(6).padStart(12)}${X.toFixed(6).padStart(12)}${Y.toFixed(6).padStart(12)}${Z.toFixed(6).padStart(12)}\n`
+        : `${String(z).padStart(5)} ${z.toFixed(6)} ${X.toFixed(6)} ${Y.toFixed(6)} ${Z.toFixed(6)}\n`;
+    }
+    if (sign < 0) o += '    1    1\n';
+    const vv = new Array(nn*nn*nn).fill(0.01);
+    for (let i=0;i<vv.length;i+=6) o += vv.slice(i,i+6).map(v=>v.toExponential(5).padStart(13)).join('')+'\n';
+    return o;
+  };
+  const organic = [[6,0,0,0],[8,1.23,0,0],[1,-1.09,0,0]];
+  const metal = [[28,0,0,0],[7,2.10,0,0],[7,-2.10,0,0],[8,0,2.05,0],[8,0,-2.05,0]];
+  const variants = [
+    ['organic Bohr/+',    organic, 1/BOHR2,  1, false, 1.23, 2],
+    ['organic Ang/-',     organic, 1,       -1, false, 1.23, 2],
+    ['organic Ang/+ bad', organic, 1,        1, false, 1.23, 2],
+    ['organic Bohr/- bad',organic, 1/BOHR2, -1, false, 1.23, 2],
+    ['fixed-width cols',  organic, 1/BOHR2,  1, true,  1.23, 2],
+    ['metal Bohr/+',      metal,   1/BOHR2,  1, false, 2.10, 4],
+  ];
+  for (const [nm, at, cs, sg, wide, wantD, wantB] of variants) {
+    const g = CL.parseCube(mkText(cs, sg, at, wide));
+    const dd = Math.hypot(g.atoms[0].x-g.atoms[1].x, g.atoms[0].y-g.atoms[1].y,
+                          g.atoms[0].zc-g.atoms[1].zc);
+    const nb = CL.inferBonds(g.atoms).length;
+    const ok = Math.abs(dd - wantD) < 0.03 && nb === wantB;
+    console.log(`  ${nm.padEnd(20)} d=${dd.toFixed(3)} bonds=${nb} ${ok ? 'OK' : 'FAIL'}`);
+    if (!ok) problems.push(`parser variant "${nm}" wrong (d=${dd.toFixed(3)}, bonds=${nb})`);
+  }
+
+  // A real ORCA molecular-orbital header. ORCA writes a NEGATIVE atom count
+  // to flag the orbital-index line, not to declare Angstrom as the Gaussian
+  // convention says — the coordinates stay in Bohr. Trusting the sign made
+  // every MO cube 1.89x oversized: bonds vanished and the isosurface floated
+  // off the molecule.
+  console.log('\n=== Real ORCA MO cube header ===');
+  const realPath = require('path').join(__dirname, 'fixtures', 'orca_mo_header.cube');
+  if (fs.existsSync(realPath)) {
+    const CL2 = w.eval('CubeLib');
+    const rg = CL2.parseCube(fs.readFileSync(realPath, 'utf8'));
+    const zn = rg.atoms[0];
+    const near = rg.atoms.slice(1)
+      .map(a => Math.hypot(a.x-zn.x, a.y-zn.y, a.zc-zn.zc))
+      .sort((p, q) => p - q).slice(0, 6);
+    const bonds = CL2.inferBonds(rg.atoms);
+    const toMetal = bonds.filter(([i, j]) => rg.atoms[i].z === 30 || rg.atoms[j].z === 30).length;
+    const gc = [0,1,2].map(i => rg.origin[i] + rg.spacing[i]*(rg.dims[i]-1)/2);
+    const ac = [0,1,2].map(i => rg.atoms.reduce((s2, a) => s2 + [a.x,a.y,a.zc][i], 0) / rg.atoms.length);
+    const off = Math.hypot(gc[0]-ac[0], gc[1]-ac[1], gc[2]-ac[2]);
+
+    console.log(`  atoms ${rg.atoms.length}, Zn-O ${near[0].toFixed(2)} A, ` +
+                `bonds ${bonds.length} (${toMetal} to the metal), offset ${off.toFixed(2)} A`);
+    if (rg.atoms.length !== 69) problems.push('real header: wrong atom count');
+    if (!(near[0] > 1.8 && near[0] < 2.3)) problems.push(`real header: Zn-O ${near[0].toFixed(2)} A implausible`);
+    if (toMetal < 4) problems.push('real header: metal coordination not detected');
+    if (off > 2) problems.push(`real header: surface displaced by ${off.toFixed(2)} A`);
+  } else {
+    console.log('  fixture missing, skipped');
+  }
+
   console.log('\nproblems:', problems.length?problems:'none');
   process.exit(problems.length?1:0);
 })();

@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.27.0';
+const BUILD = '1.28.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -1562,7 +1562,7 @@ function toggleGroup(top) {
     const bottom = Math.max(0, drag.bottom - (e.clientY - drag.y));
     stage.style.right = right + 'px';
     stage.style.bottom = bottom + 'px';
-    if (S.el) { S.fit = computeFit(); applyTransform(); }
+    resizeViewer();
   });
   grip.addEventListener('pointerup', () => {
     if (!drag) return;
@@ -1571,17 +1571,36 @@ function toggleGroup(top) {
       r: parseInt(stage.style.right, 10) || 14,
       b: parseInt(stage.style.bottom, 10) || 14,
     }));
+    resizeViewer();
     if (C3.grid) refit();
-    if (C3.renderer) {
-      C3.renderer.setSize(stage.clientWidth, stage.clientHeight, true);
-      if (C3.camera) {
-        C3.camera.aspect = stage.clientWidth / Math.max(1, stage.clientHeight);
-        C3.camera.updateProjectionMatrix();
-      }
-      renderCube();
-    }
   });
 })();
+
+/**
+ * Re-sync everything to the stage's current size.
+ *
+ * The WebGL canvas has a fixed pixel size; if the stage box changes while the
+ * drawing buffer does not, the picture is stretched. Resizing only on release
+ * is what made dragging the panel look like it distorted the view.
+ */
+let resizeQueued = false;
+function resizeViewer() {
+  if (resizeQueued) return;
+  resizeQueued = true;
+  requestAnimationFrame(() => {
+    resizeQueued = false;
+    const stage = $('stagebox');
+    const w = Math.max(64, stage.clientWidth), h = Math.max(64, stage.clientHeight);
+    if (C3.renderer && C3.camera) {
+      C3.renderer.setSize(w, h, true);
+      C3.camera.aspect = w / h;
+      C3.camera.updateProjectionMatrix();
+      renderCube();
+    }
+    if (S.el) { S.fit = computeFit(); applyTransform(); }
+    layoutOverlays();
+  });
+}
 
 /**
  * Resize the control panel, trading space with the viewer.
@@ -1596,9 +1615,7 @@ function toggleGroup(top) {
   const applyHeight = px => {
     foot.style.maxHeight = px ? px + 'px' : '';
     document.body.classList.toggle('footmin', px && px < 120);
-    layoutOverlays();
-    if (S.el) { S.fit = computeFit(); applyTransform(); }
-    if (C3.grid) refit();
+    resizeViewer();
   };
   const saved = +localStorage.getItem('vm.footH');
   if (saved) applyHeight(saved);
@@ -1619,6 +1636,8 @@ function toggleGroup(top) {
     drag = null;
     localStorage.setItem('vm.footH',
       Math.round(foot.getBoundingClientRect().height));
+    resizeViewer();
+    if (C3.grid) refit();        // reframe once the size has settled
   });
   grip.addEventListener('dblclick', () => {
     const compact = document.body.classList.contains('footmin');
@@ -1696,17 +1715,7 @@ function toggleExpanded() {
   document.body.classList.toggle('expanded', on);
   $('topbars').classList.toggle('flat', on);
   $('zExpand').textContent = on ? 'Restore' : 'Expand';
-  setTimeout(() => {
-    layoutOverlays();
-    if (S.el) { S.fit = computeFit(); applyTransform(); }
-    if (C3.grid) {
-      const wrap = $('stagebox');
-      C3.renderer.setSize(wrap.clientWidth, wrap.clientHeight, true);
-      C3.camera.aspect = wrap.clientWidth / Math.max(1, wrap.clientHeight);
-      C3.camera.updateProjectionMatrix();
-      renderCube();
-    }
-  }, 50);
+  setTimeout(resizeViewer, 50);
 }
 $('zExpand').onclick = toggleExpanded;
 
@@ -1768,16 +1777,7 @@ document.addEventListener('fullscreenchange', () => {
   $('topbars').classList.toggle('flat', on || document.body.classList.contains('expanded'));
   setBtnIcon('zFull', 'corners');
   // The canvas has a fixed pixel size, so it must be resized to the new box
-  setTimeout(() => {
-    if (C3.renderer && C3.camera) {
-      const w = $('stagebox').clientWidth, h = $('stagebox').clientHeight;
-      C3.renderer.setSize(w, h, true);
-      C3.camera.aspect = w / h;
-      C3.camera.updateProjectionMatrix();
-      renderCube();
-    }
-    if (S.el) { S.fit = computeFit(); applyTransform(); }
-  }, 60);
+  setTimeout(resizeViewer, 60);
 });
 
 /* Zoom and pan */
@@ -1832,9 +1832,7 @@ $('view').addEventListener('pointermove', e => {
 $('view').addEventListener('pointerup', () => {
   panning = null; C3.drag = null; $('view').classList.remove('drag');
 });
-window.addEventListener('resize', () => {
-  if (S.el) { S.fit = computeFit(); applyTransform(); }
-});
+window.addEventListener('resize', resizeViewer);
 
 /* ── Rebindable shortcuts ────────────────────────────────────────────────
  * Actions are named so the binding can change without touching the handler.
