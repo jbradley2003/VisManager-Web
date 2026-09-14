@@ -271,7 +271,7 @@ progress{width:100%;height:8px}
             <label>Isovalue <span id="cpIsoVal" class="val"></span></label>
             <input type="range" id="cpIso" min="0" max="1000" value="120">
             <label>Opacity <span id="cpOpVal" class="val"></span></label>
-            <input type="range" id="cpOp" min="5" max="100" value="62">
+            <input type="range" id="cpOp" min="5" max="100" value="85">
             <div class="cp-row">
               <span>Positive</span><input type="color" id="cpPos" value="#f2d140">
               <span>Negative</span><input type="color" id="cpNeg" value="#40bad6">
@@ -393,6 +393,21 @@ progress{width:100%;height:8px}
   <div class="dfoot">
     <button id="xCancel" class="sm">Close</button>
     <button id="xGo" class="primary sm">Export</button>
+  </div>
+</dialog>
+
+<dialog id="dAdd">
+  <h2>Add to the review?</h2>
+  <div class="dbody">
+    <p class="hint" id="addSummary"></p>
+    <p>Add the new files to the current list, or replace it entirely?</p>
+    <p class="hint">Replacing discards the marks and notes you have made.
+      Nothing on disk is affected either way.</p>
+  </div>
+  <div class="dfoot">
+    <button id="addCancel" class="sm">Cancel</button>
+    <button id="addReplace" class="sm">Replace</button>
+    <button id="addAppend" class="keep sm">Add to list</button>
   </div>
 </dialog>
 

@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.21.0';
+const BUILD = '1.22.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -47,7 +47,28 @@ const $ = id => document.getElementById(id);
 const extOf = n => (n.lastIndexOf('.') > 0 ? n.slice(n.lastIndexOf('.') + 1) : '').toLowerCase();
 
 /* ── Loading ─────────────────────────────────────────────────────────────── */
-function ingest(fileList) {
+/**
+ * Merge a new selection into the session, or start fresh.
+ *
+ * Previously every load replaced everything, so adding a second directory
+ * silently discarded the marks and notes made on the first.
+ */
+function ingest(fileList, mode) {
+  if (S.files.length && !mode) {
+    pendingFiles = fileList;
+    $('addSummary').textContent =
+      `${S.files.length} file(s) are already open, with ` +
+      `${[...S.state.values()].filter(v => !v).length} marked for deletion and ` +
+      `${S.notes.size} flagged.`;
+    $('dAdd').showModal();
+    return;
+  }
+  ingestNow(fileList, mode === 'add');
+}
+
+let pendingFiles = null;
+
+function ingestNow(fileList, append) {
   const files = [];
   for (const f of fileList) {
     const rel = f.webkitRelativePath || f.name;
@@ -62,13 +83,24 @@ function ingest(fileList) {
   if (!files.length) { alert('No supported files found in that folder.'); return; }
 
   files.sort((a, b) => a.path.localeCompare(b.path, undefined, {numeric: true}));
-  S.files = files;
-  S.rootName = (files[0].path.split('/')[0]) || 'folder';
-  S.state = new Map(files.map(f => [f.path, true]));
-  S.notes = new Map();
-  S.fi = S.ii = 0;
+
+  if (append) {
+    // Keep existing marks and notes; only add paths we have not seen.
+    const known = new Set(S.files.map(f => f.path));
+    const added = files.filter(f => !known.has(f.path));
+    S.files = S.files.concat(added).sort(
+      (a, b) => a.path.localeCompare(b.path, undefined, {numeric: true}));
+    for (const f of added) if (!S.state.has(f.path)) S.state.set(f.path, true);
+    S.rootName += ' + ' + ((files[0].path.split('/')[0]) || 'folder');
+  } else {
+    S.files = files;
+    S.rootName = (files[0].path.split('/')[0]) || 'folder';
+    S.state = new Map(files.map(f => [f.path, true]));
+    S.notes = new Map();
+    S.fi = S.ii = 0;
+  }
   rebuild();
-  $('dirname').textContent = `${S.rootName} — ${files.length} files`;
+  $('dirname').textContent = `${S.rootName} — ${S.files.length} files`;
   $('bExport').disabled = false;
   show();
 }
@@ -381,7 +413,7 @@ async function showTga(f) {
 const C3 = {renderer: null, scene: null, camera: null, root: null,
             grid: null, iso: 0, raf: null, drag: null,
             // Look settings, kept across files so a chosen style sticks
-            opacity: 0.62, pos: 0xf2d140, neg: 0x40bad6, bg: 0x0b0712,
+            opacity: 0.85, pos: 0xf2e120, neg: 0x2fd0e0, bg: 0x0b0712,
             flat: false, showAtoms: true, showBonds: true,
             elementColors: {},          // {atomicNumber: 0xrrggbb}
             atomScale: 1.0, showH: true, showPos: true, showNeg: true,
@@ -440,6 +472,7 @@ function loadThree() {
 }
 
 function buildCubeScene(THREE, grid) {
+  C3.THREE = THREE;
   const wrap = $('stagebox');
   // A zero-sized stage yields a zero-sized renderer and a NaN aspect ratio,
   // so the scene renders nothing at all. Fall back rather than draw blank.
@@ -515,11 +548,13 @@ function buildCubeScene(THREE, grid) {
  */
 function frameScene(THREE, w, h) {
   const root = C3.root;
+  C3.panX = 0; C3.panY = 0;
   root.position.set(0, 0, 0);
   const box = new THREE.Box3().setFromObject(root);
   if (box.isEmpty()) return;
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   root.position.sub(sphere.center);           // orbit about the content
+  C3.centerOffset = sphere.center.clone();
 
   const fov = 45;
   const fitH = sphere.radius / Math.sin((fov / 2) * Math.PI / 180);
@@ -541,26 +576,41 @@ function frameScene(THREE, w, h) {
 
 function addIsoSurfaces(THREE, root, grid, iso) {
   C3.surfaces = [];
-  for (const [level, color] of [[iso, C3.pos], [-iso, C3.neg]]) {
+  const levels = [[iso, C3.pos], [-iso, C3.neg]];
+
+  for (let li = 0; li < levels.length; li++) {
+    const [level, color] = levels[li];
     const surf = CubeLib.isosurface(grid, level);
-    if (!surf.positions.length) continue;
-    // Weld first: marching tetrahedra emits unshared vertices, so without
-    // this there is no connectivity to smooth across and the GPU uploads
-    // roughly six times more vertices than it needs.
+    if (!surf.positions.length) { C3.surfaces.push(null); continue; }
+
     let built = CubeLib.weld(surf.positions, surf.normals);
     if (C3.smooth > 0) built = CubeLib.smoothMesh(built, C3.smooth);
+
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(built.positions, 3));
     geom.setAttribute('normal', new THREE.BufferAttribute(built.normals, 3));
     geom.setIndex(new THREE.BufferAttribute(built.indices, 1));
-    const mat = new THREE.MeshPhongMaterial({
-      color, transparent: true, opacity: C3.opacity, shininess: 40,
-      side: THREE.DoubleSide, depthWrite: false,  // sane blending of two lobes
-      flatShading: C3.flat
+
+    // Two passes per lobe: inside faces first, then outside.
+    //
+    // A single DoubleSide mesh with depthWrite off leaves the blend order to
+    // three.js, which sorts transparent objects by bounding-sphere centre.
+    // Two orbital lobes share almost the same centre, so that sort flips as
+    // the camera moves and the colours appear to swap. Drawing back faces
+    // before front faces makes each lobe self-consistent, and explicit
+    // renderOrder fixes the order between lobes instead of leaving it to a
+    // distance comparison that cannot separate them.
+    const mkMat = side => new THREE.MeshPhongMaterial({
+      color, transparent: true, opacity: C3.opacity, shininess: 55,
+      specular: 0x333333, side, depthWrite: false, flatShading: C3.flat,
     });
-    const mesh = new THREE.Mesh(geom, mat);
-    root.add(mesh);
-    C3.surfaces.push(mesh);
+
+    const back = new THREE.Mesh(geom, mkMat(THREE.BackSide));
+    const front = new THREE.Mesh(geom, mkMat(THREE.FrontSide));
+    back.renderOrder = 10 + li * 2;
+    front.renderOrder = 11 + li * 2;
+    root.add(back, front);
+    C3.surfaces.push({back, front, geom});
   }
 }
 
@@ -600,6 +650,41 @@ function addMolecule(THREE, root, grid) {
   }
 }
 
+/**
+ * Orbit about the screen axes.
+ *
+ * Adding to root.rotation.x/y accumulates Euler angles in the object's own
+ * frame, so once the model has been turned, a horizontal drag no longer spins
+ * it horizontally — it drifts and can gimbal-lock. Rotating about the world
+ * axes keeps the drag aligned with the screen whatever the current pose.
+ */
+function orbitScene(dx, dy) {
+  if (!C3.root || !C3.THREE) return;
+  const T = C3.THREE;
+  const speed = 0.008;
+  C3.root.rotateOnWorldAxis(new T.Vector3(0, 1, 0), dx * speed);
+  C3.root.rotateOnWorldAxis(new T.Vector3(1, 0, 0), dy * speed);
+}
+
+/**
+ * Slide the model in the plane of the screen.
+ *
+ * Scaled by the distance so a drag moves the model the same number of pixels
+ * regardless of how far the camera has been dollied.
+ */
+function panScene(dx, dy) {
+  if (!C3.root || !C3.camera) return;
+  const stage = $('stagebox');
+  const fov = C3.camera.fov * Math.PI / 180;
+  const viewH = 2 * Math.tan(fov / 2) * C3.dist;
+  const perPixel = viewH / Math.max(1, stage.clientHeight);
+  C3.panX = (C3.panX || 0) + dx * perPixel;
+  C3.panY = (C3.panY || 0) - dy * perPixel;
+  const c = C3.centerOffset;
+  C3.root.position.x = (c ? -c.x : 0) + C3.panX;
+  C3.root.position.y = (c ? -c.y : 0) + C3.panY;
+}
+
 function renderCube() {
   if (C3.renderer && C3.scene && C3.camera) C3.renderer.render(C3.scene, C3.camera);
 }
@@ -610,11 +695,13 @@ function rebuildIso(newIso) {
     if (!THREE) return;
     C3.iso = newIso;
     // Drop the old surfaces but keep the molecule
-    for (const child of [...C3.root.children]) {
-      if (child.isMesh && child.material.transparent) {
-        child.geometry.dispose(); child.material.dispose();
-        C3.root.remove(child);
+    for (const pair of C3.surfaces) {
+      if (!pair) continue;
+      for (const mesh of [pair.back, pair.front]) {
+        mesh.material.dispose();
+        C3.root.remove(mesh);
       }
+      pair.geom.dispose();          // shared by both passes
     }
     addIsoSurfaces(THREE, C3.root, C3.grid, newIso);
     $('isoLbl').textContent = isoLabel(newIso);
@@ -661,12 +748,17 @@ function setBrightness(v) {
 
 function restyle() {
   for (let i = 0; i < C3.surfaces.length; i++) {
-    C3.surfaces[i].visible = i === 0 ? C3.showPos : C3.showNeg;
-    const m = C3.surfaces[i].material;
-    m.color.setHex(i === 0 ? C3.pos : C3.neg);
-    m.opacity = C3.opacity;
-    m.flatShading = C3.flat;
-    m.needsUpdate = true;
+    const pair = C3.surfaces[i];
+    if (!pair) continue;
+    const show = i === 0 ? C3.showPos : C3.showNeg;
+    for (const mesh of [pair.back, pair.front]) {
+      mesh.visible = show;
+      const m = mesh.material;
+      m.color.setHex(i === 0 ? C3.pos : C3.neg);
+      m.opacity = C3.opacity;
+      m.flatShading = C3.flat;
+      m.needsUpdate = true;
+    }
   }
   for (const m of C3.atomMeshes) {
     m.visible = C3.showAtoms && (m.userData.z !== 1 || C3.showH);
@@ -1068,6 +1160,11 @@ $('bExport').onclick = () => {
 $('xCancel').onclick = () => $('dExport').close();
 $('xGo').onclick = () => runExport();
 
+// Right-dragging must not raise the context menu over the 3D view
+$('view').addEventListener('contextmenu', e => {
+  if (C3.grid) e.preventDefault();
+});
+
 /* Isosurface controls */
 $('isoUp').onclick = () => rebuildIso(C3.iso * 1.35);
 $('isoDown').onclick = () => rebuildIso(C3.iso / 1.35);
@@ -1102,6 +1199,7 @@ $('isoReset').onclick = () => {
  */
 function cubeOp(op) {
   if (!C3.root) return;
+  if (op === 'reset') { C3.panX = 0; C3.panY = 0; }
   const HALF = Math.PI;
   if (op === 'cw') C3.root.rotateZ(-Math.PI / 2);
   else if (op === 'ccw') C3.root.rotateZ(Math.PI / 2);
@@ -1201,7 +1299,7 @@ $('cpFit').onclick   = () => refit();
 $('cpAtoms').onchange = e => { C3.showAtoms = e.target.checked; restyle(); };
 $('cpBonds').onchange = e => { C3.showBonds = e.target.checked; restyle(); };
 $('cpReset').onclick = () => {
-  Object.assign(C3, {opacity: 0.62, pos: 0xf2d140, neg: 0x40bad6,
+  Object.assign(C3, {opacity: 0.85, pos: 0xf2e120, neg: 0x2fd0e0,
                      bg: 0x0b0712, flat: false, showAtoms: true,
                      showBonds: true, elementColors: {}, atomScale: 1.0,
                      showH: true, showPos: true, showNeg: true,
@@ -1280,6 +1378,10 @@ function layoutOverlays() {
   if (panel) panel.style.top = (h + 16) + 'px';
 }
 window.addEventListener('resize', layoutOverlays);
+
+$('addAppend').onclick = () => { $('dAdd').close(); ingestNow(pendingFiles, true); };
+$('addReplace').onclick = () => { $('dAdd').close(); ingestNow(pendingFiles, false); };
+$('addCancel').onclick = () => { $('dAdd').close(); pendingFiles = null; };
 
 /* Sidebar resizing. Width is remembered so the layout survives a reload. */
 (function () {
@@ -1396,9 +1498,12 @@ $('viewwrap').addEventListener('wheel', e => {
 }, {passive: false});
 let panning = null;
 $('view').addEventListener('pointerdown', e => {
-  if (C3.grid && !S.el) {          // orbit the 3D scene instead of panning
-    C3.drag = {x: e.clientX, y: e.clientY};
+  if (C3.grid && !S.el) {
+    // Left button orbits, right button repositions the structure.
+    C3.drag = {x: e.clientX, y: e.clientY,
+               pan: e.button === 2 || e.shiftKey};
     $('view').setPointerCapture(e.pointerId);
+    e.preventDefault();
     return;
   }
   if (!S.el) return;
@@ -1408,9 +1513,8 @@ $('view').addEventListener('pointerdown', e => {
 $('view').addEventListener('pointermove', e => {
   if (C3.drag && C3.root) {
     const dx = e.clientX - C3.drag.x, dy = e.clientY - C3.drag.y;
-    C3.drag = {x: e.clientX, y: e.clientY};
-    C3.root.rotation.y += dx * 0.01;
-    C3.root.rotation.x += dy * 0.01;
+    C3.drag = {x: e.clientX, y: e.clientY, pan: C3.drag.pan};
+    if (C3.drag.pan) panScene(dx, dy); else orbitScene(dx, dy);
     renderCube();
     return;
   }

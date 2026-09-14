@@ -45,6 +45,7 @@ jobs:
           node web/test/load.test.js
           node web/test/smoke.test.js
           node web/test/cube.test.js
+          node web/test/add.test.js
 
       - uses: actions/configure-pages@v5
 

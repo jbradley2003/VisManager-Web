@@ -51,7 +51,8 @@ const THREE = {
     getSize(){return new V3(10,10,10);} getCenter(){return new V3();} },
   Sphere: class { constructor(){this.radius=8;this.center=new V3();} },
   Vector3: V3, Color: class { setHex(){} },
-  ACESFilmicToneMapping: 1, NoToneMapping: 0, DoubleSide: 2,
+  ACESFilmicToneMapping: 1, NoToneMapping: 0,
+  DoubleSide: 2, FrontSide: 0, BackSide: 1,
 };
 // Stub the dynamic import
 w.eval('loadThree = () => Promise.resolve(window.__THREE);');
@@ -88,7 +89,19 @@ console.log('ingested cube files:', api.S.files.length);
     console.log('grid dims        :', C3.grid && C3.grid.dims.join('x'));
     console.log('atoms parsed     :', C3.grid && C3.grid.atoms.length);
     console.log('auto isovalue    :', C3.iso && C3.iso.toExponential(2));
-    console.log('surfaces built   :', C3.surfaces.length);
+    const pairs = C3.surfaces.filter(Boolean);
+    console.log('surfaces built   :', pairs.length, 'lobe(s)');
+    const twoPass = pairs.every(p => p.back && p.front &&
+                                     p.back.material.side === 1 &&
+                                     p.front.material.side === 0);
+    console.log('two-pass per lobe:', twoPass);
+    if (!twoPass) problems.push('lobes are not rendered back-then-front');
+    const orders = pairs.flatMap(p => [p.back.renderOrder, p.front.renderOrder]);
+    const strictlyIncreasing = orders.every((v, i) => i === 0 || v > orders[i - 1]);
+    console.log('render order     :', orders.join(' < '), strictlyIncreasing ? 'OK' : 'AMBIGUOUS');
+    if (!strictlyIncreasing) problems.push('render order is ambiguous');
+    const shared = pairs.every(p => p.back.geometry === p.front.geometry);
+    console.log('geometry shared  :', shared, '(one upload, not two)');
     console.log('atom meshes      :', C3.atomMeshes.length);
     console.log('bond meshes      :', C3.bondMeshes.length);
     console.log('camera created   :', !!C3.camera);

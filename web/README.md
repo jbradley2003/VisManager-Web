@@ -52,6 +52,17 @@ PNG, JPEG, GIF, WebP, BMP and ICO render natively. PDF previews through
 pdf.js. TGA is decoded in-page by a small built-in decoder (uncompressed and
 RLE truecolour, plus greyscale). TIFF and DDS are listed and markable but not previewed.
 
+Drag with the **left button to orbit**, **right button (or Shift+drag) to
+reposition** the structure, and scroll to zoom. Orbiting rotates about the
+screen axes rather than accumulating Euler angles, so a horizontal drag always
+spins the model horizontally no matter how it is currently turned.
+
+Each lobe is drawn in two passes, inside faces before outside. A single
+double-sided translucent mesh leaves the blend order to three.js, which sorts
+transparent objects by bounding-sphere centre — two orbital lobes share almost
+the same centre, so that sort flips as the camera moves and the colours appear
+to swap.
+
 **Cube files render in 3D** with a full control panel — isovalue, opacity,
 lobe colours, per-element atom colours, structure scale, hydrogen and bond
 toggles, background presets, and Front/Side/Top view buttons. Press `I` or
