@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.24.0';
+const BUILD = '1.25.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -263,7 +263,13 @@ async function show() {
   $('bFlag').className = S.notes.has(f.path) ? 'flag' : '';
   setBtnIcon('bFlag', 'flag');
 
+  // C3.grid doubles as the "a cube is on screen" flag: every rotate, flip and
+  // zoom handler branches on it. It used to persist after navigating away, so
+  // once any cube had been opened those controls drove an invisible camera
+  // instead of the image. Clear it here; showCube sets it again.
+  C3.grid = null;
   showIsoControls(false);
+  $('cubePanel').classList.remove('on');
   { const fr = $('imgframe'); if (fr) fr.style.display = 'none'; }
   layoutOverlays();
   try {
@@ -943,7 +949,7 @@ function refreshNavModeBtn() {
   if (!b) return;
   const wrap = S.navMode === 'wrap';
   b.textContent = wrap ? 'Wrap in folder' : 'Continuous (all folders)';
-  setBtnIcon('bNavMode', wrap ? 'nav-wrap' : 'nav-cont', 19);
+  setBtnIcon('bNavMode', wrap ? 'nav-wrap' : 'nav-cont', 26);
   b.className = 'sm ' + (wrap ? 'primary' : 'teal');
   // Rewriting textContent above drops the <kbd>, so put it back here rather
   // than relying on the caller's ordering.
@@ -1226,6 +1232,12 @@ $('bExport').onclick = () => {
 };
 $('xCancel').onclick = () => $('dExport').close();
 $('xGo').onclick = () => runExport();
+
+// The wheel handler lives on #viewwrap and the panel sits inside it, so
+// scrolling the settings list was bubbling up and dollying the camera — which
+// also meant the list never scrolled and its scrollbar stayed hidden.
+$('cubePanel').addEventListener('wheel', e => e.stopPropagation(), {passive: true});
+$('cubePanel').addEventListener('pointerdown', e => e.stopPropagation());
 
 // Right-dragging must not raise the context menu over the 3D view
 $('view').addEventListener('contextmenu', e => {
