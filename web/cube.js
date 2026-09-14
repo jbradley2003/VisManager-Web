@@ -56,6 +56,10 @@ function parseCube(text) {
   }
   if (parseInt(head[0], 10) < 0) li++;         // orbital index line
 
+  // Convert once, into a single set of arrays. A previous version scaled the
+  // origin into a copy while handing the raw origin to the grid-scale check
+  // alongside the already-scaled spacing; reasoning about two different unit
+  // systems at once is what slid the isosurface off the molecule.
   const scale = angstrom ? 1 : BOHR_TO_ANGSTROM;
   const spacing = axes.map(a => Math.hypot(a[0], a[1], a[2]) * scale);
   const org = origin.map(v => v * scale);
@@ -75,7 +79,12 @@ function parseCube(text) {
     }
   }
 
-  normaliseScale(atoms, origin, spacing);
+  // Only the ATOM block is sanity-checked. The origin and axis vectors come
+  // from the same header lines that declare the units, so they are consistent
+  // with the flag by construction — second-guessing them just moves the
+  // surface off the molecule, and any rule for "is this box the right size"
+  // is unreliable when a small molecule sits in a deliberately generous grid.
+  fixAtomScale(atoms);
 
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < total; i++) {
@@ -86,19 +95,18 @@ function parseCube(text) {
 }
 
 /**
- * Correct an implausible coordinate scale.
+ * Correct an implausible ATOM scale.
  *
- * The units flag is not always trustworthy: some writers emit Angstrom
- * coordinates while still declaring a positive atom count (which the format
- * says means Bohr), and the reverse happens too. Either way every interatomic
- * distance ends up wrong by a factor of 1.89, and bond detection — which
- * works in absolute Angstrom — silently finds nothing.
+ * The units flag is not always trustworthy: writers emit Angstrom coordinates
+ * while declaring a positive atom count (which the format says means Bohr),
+ * and the reverse. Either way interatomic distances end up wrong by 1.89 and
+ * bond detection, which works in absolute Angstrom, finds nothing.
  *
- * Real covalent bonds run roughly 0.9 to 2.4 A, so the median nearest
- * neighbour distance is a reliable tell. Atoms, origin and spacing are scaled
- * together, so the isosurface stays aligned with the molecule.
+ * Only the atoms are touched here. The grid carries its own scale and is
+ * usually right; scaling both together on the strength of an atom-based test
+ * leaves the molecule correct but pushes the isosurface off to one side.
  */
-function normaliseScale(atoms, origin, spacing) {
+function fixAtomScale(atoms) {
   if (atoms.length < 2) return 1;
 
   const nn = [];
@@ -116,11 +124,10 @@ function normaliseScale(atoms, origin, spacing) {
   nn.sort((a, b) => a - b);
   const median = nn[Math.floor(nn.length / 2)];
 
-  // Hydrogen is the sharpest ruler available. An X-H bond is 0.9 to 1.2 A in
-  // every ordinary structure, so if the closest neighbour of a hydrogen is far
-  // from that, the whole file is on the wrong scale. Metal-ligand distances
-  // reach 2.4 A legitimately, which is why the median alone cannot separate a
-  // real coordination complex from a mis-scaled organic molecule.
+  // Hydrogen is the sharpest ruler available: an X-H bond is 0.9 to 1.2 A in
+  // any ordinary structure. Metal-ligand distances reach 2.4 A legitimately,
+  // so the median alone cannot separate a real coordination complex from a
+  // mis-scaled organic molecule.
   let hMin = Infinity;
   for (let i = 0; i < atoms.length; i++) {
     if (atoms[i].z !== 1) continue;
@@ -134,20 +141,28 @@ function normaliseScale(atoms, origin, spacing) {
 
   let factor = 1;
   if (isFinite(hMin)) {
-    if (hMin < 0.7) factor = 1 / BOHR_TO_ANGSTROM;      // too short: was Angstrom
-    else if (hMin > 1.5) factor = BOHR_TO_ANGSTROM;     // too long: was Bohr
+    if (hMin < 0.7) factor = 1 / BOHR_TO_ANGSTROM;
+    else if (hMin > 1.5) factor = BOHR_TO_ANGSTROM;
   } else {
-    // No hydrogens; fall back to the median, with bounds wide enough to leave
-    // genuine metal-ligand distances alone.
     if (median < 0.75) factor = 1 / BOHR_TO_ANGSTROM;
     else if (median > 3.2) factor = BOHR_TO_ANGSTROM;
   }
-  if (factor === 1) return 1;
-
-  for (const a of atoms) { a.x *= factor; a.y *= factor; a.zc *= factor; }
-  for (let i = 0; i < 3; i++) { origin[i] *= factor; spacing[i] *= factor; }
+  if (factor !== 1)
+    for (const a of atoms) { a.x *= factor; a.y *= factor; a.zc *= factor; }
   return factor;
 }
+
+/**
+ * Put the grid on the same scale as the atoms.
+ *
+ * Decided by fit rather than by the header: a cube's grid always encloses the
+ * molecule it was computed for, so the candidate scale under which the atoms
+ * actually sit inside the box, near its centre, is the right one. This is what
+ * keeps the isosurface on the molecule when the two halves of the file
+ * disagree about units.
+ */
+
+
 
 /**
  * Pick a starting isovalue that shows the feature rather than a nuclear cusp.
@@ -511,13 +526,13 @@ function inferBonds(atoms, tolerance = 0.45) {
 
 if (typeof window !== 'undefined') {
   window.CubeLib = {parseCube, chooseIsovalue, isosurface, inferBonds, downsample,
-                    normaliseScale,
+                    fixAtomScale,
                     weld, smoothMesh, recomputeNormals,
                     symbolOf, colorOf, radiusOf, BOHR_TO_ANGSTROM};
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {parseCube, chooseIsovalue, isosurface, inferBonds, downsample,
-                    normaliseScale,
+                    fixAtomScale,
                     weld, smoothMesh, recomputeNormals,
                     symbolOf, colorOf, radiusOf, BOHR_TO_ANGSTROM};
 }

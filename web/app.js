@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.26.0';
+const BUILD = '1.27.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -1583,6 +1583,50 @@ function toggleGroup(top) {
   });
 })();
 
+/**
+ * Resize the control panel, trading space with the viewer.
+ *
+ * Dragging it small switches the footer to a compact mode: the labels and
+ * status lines drop out and the buttons shrink onto one line, which is the
+ * same trade the sidebar offers horizontally.
+ */
+(function footResize() {
+  const grip = $('footGrip'), foot = $('foot');
+  if (!grip) return;
+  const applyHeight = px => {
+    foot.style.maxHeight = px ? px + 'px' : '';
+    document.body.classList.toggle('footmin', px && px < 120);
+    layoutOverlays();
+    if (S.el) { S.fit = computeFit(); applyTransform(); }
+    if (C3.grid) refit();
+  };
+  const saved = +localStorage.getItem('vm.footH');
+  if (saved) applyHeight(saved);
+
+  let drag = null;
+  grip.addEventListener('pointerdown', e => {
+    drag = {y: e.clientY, h: foot.getBoundingClientRect().height};
+    grip.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const h = Math.max(46, Math.min(innerHeight * 0.6, drag.h - (e.clientY - drag.y)));
+    applyHeight(h);
+  });
+  grip.addEventListener('pointerup', () => {
+    if (!drag) return;
+    drag = null;
+    localStorage.setItem('vm.footH',
+      Math.round(foot.getBoundingClientRect().height));
+  });
+  grip.addEventListener('dblclick', () => {
+    const compact = document.body.classList.contains('footmin');
+    applyHeight(compact ? 0 : 60);
+    localStorage.setItem('vm.footH', compact ? 0 : 60);
+  });
+})();
+
 /* Sidebar resizing. Width is remembered so the layout survives a reload. */
 (function () {
   const grip = $('grip'), side = $('side');
@@ -1707,7 +1751,10 @@ $('zExpand').onclick = toggleExpanded;
  * settings panel and zoom controls stay usable. Requesting it on the whole
  * document would keep the sidebar and footer, which defeats the point. */
 function toggleFullscreen() {
-  const el = $('viewwrap');
+  // Fullscreen the stage COLUMN, not just the viewer, so the navigation and
+  // marking buttons come along. Requesting it on the viewer alone left the
+  // controls behind, which made fullscreen useless for actually reviewing.
+  const el = $('stage');
   if (!document.fullscreenElement) {
     (el.requestFullscreen || el.webkitRequestFullscreen).call(el)
       .catch(err => alert('Fullscreen refused: ' + err.message));

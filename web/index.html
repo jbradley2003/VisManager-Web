@@ -69,7 +69,10 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
    makes it a single flex item again. */
 #brand{font-size:17px;font-weight:800;letter-spacing:-.3px;display:flex;
   align-items:center;gap:8px}
-#wordmark{white-space:nowrap}
+#wordmark{white-space:nowrap;line-height:1.05}
+/* Name on top, build underneath, so the row stays short. */
+#brandText{display:flex;flex-direction:column;justify-content:center}
+#ver{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:0}
 /* The logo is a full-colour illustration, so it needs a light plate to sit
    on rather than the dark toolbar. */
 #logoBox{background:#fff;border-radius:8px;padding:3px;display:flex;
@@ -217,7 +220,20 @@ button.big img{width:21px;height:21px}
 #zlbl{min-width:52px;text-align:center;align-self:center;font-weight:700;
   font-size:12px;color:var(--flag-text)}
 
-#foot{background:var(--bg-mid);padding:8px 14px;min-width:0}
+#foot{background:var(--bg-mid);padding:8px 14px;min-width:0;overflow:hidden;
+  flex-shrink:0}
+/* Drag to trade space between the viewer and the controls. */
+#footGrip{height:7px;cursor:ns-resize;background:var(--bg-mid);
+  border-top:1px solid var(--border);flex-shrink:0;position:relative}
+#footGrip::after{content:"";position:absolute;left:50%;top:2px;
+  width:46px;height:3px;margin-left:-23px;border-radius:2px;
+  background:var(--border)}
+#footGrip:hover::after{background:var(--accent)}
+body.footmin #foot{padding:2px 10px}
+body.footmin #fname,body.footmin #finfo,body.footmin #note,
+body.footmin #state,body.footmin #keys,body.footmin #modebar{display:none}
+body.footmin #acts button{padding:5px 9px;font-size:12px}
+body.footmin #acts button img{width:15px;height:15px}
 #fname{text-align:center;font-weight:700}
 #finfo{text-align:center;font-size:12px;color:var(--muted)}
 #note{text-align:center;font-size:12px;color:var(--flag-text);min-height:17px}
@@ -260,10 +276,11 @@ progress{width:100%;height:8px}
 <div id="app">
   <div id="toolbar">
     <div id="brand" title="build">
-      <span id="logoBox"><img id="logo" alt="" width="28" height="28"></span>
-      <span id="wordmark"><span>Vis</span>Manager</span>
-      <span style="font-size:11px;color:var(--muted)">web</span>
-      <span id="ver" style="font-size:10px;color:var(--muted)"></span>
+      <span id="logoBox"><img id="logo" alt="" width="42" height="42"></span>
+      <span id="brandText">
+        <span id="wordmark"><span>Vis</span>Manager</span>
+        <span id="ver"></span>
+      </span>
     </div>
     <button id="bOpen" class="primary big">Open folder</button>
     <span id="dirname" class="hint">no folder loaded</span>
@@ -401,6 +418,7 @@ progress{width:100%;height:8px}
           <div id="cpGrip" title="Drag to resize"></div>
         </div>
       </div>
+      <div id="footGrip" title="Drag to resize, double-click to collapse"></div>
       <div id="foot">
         <div id="fname"></div>
         <div id="finfo"></div>
