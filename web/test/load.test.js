@@ -59,6 +59,24 @@ const blank = [...d.querySelectorAll('button')]
 console.log('blank buttons:', blank.length ? blank : 'none');
 if (blank.length) errors.push('blank buttons: ' + blank.join(', '));
 
+// Structural assertions. A stray </div> can reparent whole sections while
+// still producing valid HTML — the footer once ended up as a sibling of the
+// viewer inside #main, which broke the entire layout without any error.
+const expectParent = {
+  head: 'stage', bar: 'stage', viewwrap: 'stage', foot: 'stage',
+  stagebox: 'viewwrap', view: 'stagebox', topbars: 'viewwrap',
+  cubePanel: 'viewwrap', side: 'main', stage: 'main', tree: 'side',
+};
+const wrong = [];
+for (const [id, parent] of Object.entries(expectParent)) {
+  const el = d.getElementById(id);
+  if (!el) { wrong.push(`#${id} missing`); continue; }
+  if (el.parentElement.id !== parent)
+    wrong.push(`#${id} is inside #${el.parentElement.id}, expected #${parent}`);
+}
+console.log('DOM hierarchy:', wrong.length ? wrong : 'correct');
+if (wrong.length) errors.push(...wrong);
+
 // The stage must have real layout height, or the fit calculation divides by
 // zero and the image renders a few pixels wide.
 const stageStyled = /#stagebox\{[^}]*position:absolute/.test(html);

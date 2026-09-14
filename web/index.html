@@ -48,13 +48,9 @@ button.sm{padding:5px 10px;font-size:12px;border-radius:7px}
 img.ico{display:block;flex:0 0 auto;pointer-events:none}
 kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
   font:11px monospace;margin-left:4px}
-/* Shortcut caption under a button whose label has no room for one inline */
-.kcap{position:absolute;left:0;right:0;bottom:-14px;font:10px monospace;
-  color:var(--muted);text-align:center;pointer-events:none}
 #acts button,#imgbar button,#zoombar button,#isobar button,#modebar button{
   position:relative}
-#acts{margin-bottom:14px}
-#imgbar,#zoombar{padding-bottom:16px}
+
 
 /* Clamp to the viewport. A flex child defaults to min-width:auto, so a wide
    footer (the shortcut strip and button row) can force #main wider than the
@@ -70,7 +66,12 @@ kbd{background:rgba(255,255,255,.14);border-radius:4px;padding:1px 5px;
   margin-left:0}
 #brand{font-size:17px;font-weight:800;letter-spacing:-.3px;display:flex;
   align-items:center;gap:8px}
-#logo{display:block;flex-shrink:0}
+/* The logo is a full-colour illustration, so it needs a light plate to sit
+   on rather than the dark toolbar. */
+#logoBox{background:#fff;border-radius:8px;padding:3px;display:flex;
+  align-items:center;justify-content:center;flex-shrink:0;
+  box-shadow:0 1px 4px rgba(0,0,0,.4)}
+#logo{display:block}
 #tbspace{flex:1}
 /* The four icon buttons carry meaning only through their glyphs, so they get
    a larger hit area and a larger icon than the compact .sm buttons. */
@@ -243,7 +244,7 @@ progress{width:100%;height:8px}
 <div id="app">
   <div id="toolbar">
     <div id="brand" title="build">
-      <img id="logo" alt="" width="28" height="28">
+      <span id="logoBox"><img id="logo" alt="" width="28" height="28"></span>
       <span>Vis</span>Manager
       <span style="font-size:11px;color:var(--muted)">web</span>
       <span id="ver" style="font-size:10px;color:var(--muted)"></span>
@@ -382,36 +383,27 @@ progress{width:100%;height:8px}
             </div>
           </div>
           <div id="cpGrip" title="Drag to resize"></div>
-          </div>
         </div>
-
       </div>
       <div id="foot">
         <div id="fname"></div>
         <div id="finfo"></div>
         <div id="acts">
           <button id="bPF" title="Previous folder"></button>
-          <button id="bPI" title="Previous image"><kbd>←</kbd></button>
-          <button class="keep" id="bKeep">✓ KEEP<kbd>K</kbd></button>
-          <button class="del" id="bDel">✗ DELETE<kbd>D</kbd></button>
-          <button id="bNote">Note<kbd>N</kbd></button>
-          <button id="bFlag">Flag<kbd>F</kbd></button>
+          <button id="bPI" title="Previous image"></button>
+          <button class="keep" id="bKeep">✓ KEEP</button>
+          <button class="del" id="bDel">✗ DELETE</button>
+          <button id="bNote">Note</button>
+          <button id="bFlag">Flag</button>
           <button id="bDrop" title="Remove this file from the review">Remove</button>
-          <button id="bNI" title="Next image"><kbd>→</kbd></button>
+          <button id="bNI" title="Next image"></button>
           <button id="bNF" title="Next folder"></button>
         </div>
         <div id="modebar">
           <button id="bNavMode" class="sm teal"></button>
         </div>
         <div id="state"></div>
-        <div id="keys" class="hint">
-          <kbd>K</kbd> keep <kbd>D</kbd> delete <kbd>Space</kbd> toggle
-          <kbd>N</kbd> note <kbd>F</kbd> flag
-          <kbd>←</kbd><kbd>→</kbd> image <kbd>,</kbd><kbd>.</kbd> folder
-          <kbd>[</kbd><kbd>]</kbd> rotate <kbd>H</kbd><kbd>V</kbd> flip
-          <kbd>=</kbd><kbd>-</kbd> zoom <kbd>0</kbd> fit
-          <kbd>I</kbd> 3D settings <kbd>F11</kbd> fullscreen
-        </div>
+        <div id="keys" class="hint">Shortcuts are shown on the buttons. Click the keyboard button in the toolbar to rebind them.</div>
         <div id="note"></div>
       </div>
     </div>

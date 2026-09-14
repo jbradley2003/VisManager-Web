@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.23.0';
+const BUILD = '1.24.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -945,7 +945,14 @@ function refreshNavModeBtn() {
   b.textContent = wrap ? 'Wrap in folder' : 'Continuous (all folders)';
   setBtnIcon('bNavMode', wrap ? 'nav-wrap' : 'nav-cont', 19);
   b.className = 'sm ' + (wrap ? 'primary' : 'teal');
-  appendKeyCap(b, 'navMode');
+  // Rewriting textContent above drops the <kbd>, so put it back here rather
+  // than relying on the caller's ordering.
+  if (typeof KEYS !== 'undefined' && KEYS.navMode) {
+    const k = document.createElement('kbd');
+    k.textContent = prettyKey(KEYS.navMode);
+    b.appendChild(k);
+  }
+
 }
 function stepFolder(d) {
   if (!S.folders.length) return;
@@ -1760,55 +1767,38 @@ const HANDLERS = {
 };
 
 /**
- * Show a button's shortcut, either inline or as a caption underneath.
+ * Put every shortcut inside its button.
  *
- * Captions are regenerated from KEYS rather than written into the markup, so
- * rebinding a key updates every button that mentions it. Buttons that already
- * print their key inline (a <kbd> in the label) are left alone.
+ * Captions under buttons duplicated keys that were already printed inline and
+ * left stray letters floating under the row, so the key now lives in a <kbd>
+ * within the label and nowhere else.
  */
-function appendKeyCap(btn, action) {
-  if (!btn) return;
-  const key = KEYS[action];
-  let cap = btn.querySelector('.kcap');
-  if (!key) { if (cap) cap.remove(); return; }
-  if (!cap) {
-    cap = document.createElement('span');
-    cap.className = 'kcap';
-    btn.appendChild(cap);
-  }
-  cap.textContent = prettyKey(key);
-}
+const BTN_ACTIONS = {
+  bKeep: 'keep', bDel: 'delete', bNote: 'note', bFlag: 'flag',
+  bPI: 'prev', bNI: 'next', bPF: 'prevFold', bNF: 'nextFold',
+  bDrop: 'remove', bNavMode: 'navMode',
+  rotL: 'rotL', rotR: 'rotR', flipH: 'flipH', flipV: 'flipV',
+  rotReset: 'resetRot', zIn: 'zoomIn', zOut: 'zoomOut', zFit: 'zoomFit',
+  zFull: 'full', zExpand: 'expandWin', isoMore: 'iso',
+};
 
-/** Refresh every shortcut indicator after a rebind. */
 function refreshKeyCaps() {
-  const inline = {bKeep: 'keep', bDel: 'delete', bNote: 'note', bFlag: 'flag',
-                  bPI: 'prev', bNI: 'next'};
-  for (const [id, action] of Object.entries(inline)) {
+  for (const [id, action] of Object.entries(BTN_ACTIONS)) {
     const btn = $(id);
     if (!btn) continue;
-    const kbd = btn.querySelector('kbd');
-    if (kbd) kbd.textContent = prettyKey(KEYS[action]);
-    else appendKeyCap(btn, action);
-  }
-  // Buttons with room but no inline key
-  for (const [id, action] of [['bPF', 'prevFold'], ['bNF', 'nextFold'],
-                              ['rotL', 'rotL'], ['rotR', 'rotR'],
-                              ['flipH', 'flipH'], ['flipV', 'flipV'],
-                              ['rotReset', 'resetRot'], ['zIn', 'zoomIn'],
-                              ['zOut', 'zoomOut'], ['zFit', 'zoomFit'],
-                              ['zFull', 'full'], ['bDrop', 'remove'],
-                              ['isoMore', 'iso']]) {
-    appendKeyCap($(id), action);
+    btn.querySelectorAll('.kcap').forEach(n => n.remove());   // legacy captions
+    let kbd = btn.querySelector('kbd');
+    const key = KEYS[action];
+    if (!key) { if (kbd) kbd.remove(); continue; }
+    if (!kbd) {
+      kbd = document.createElement('kbd');
+      btn.appendChild(kbd);
+    }
+    kbd.textContent = prettyKey(key);
+    btn.title = (btn.title || '').replace(/\s*\[[^\]]*\]$/, '') +
+                ` [${prettyKey(key)}]`;
   }
   refreshNavModeBtn();
-  const strip = $('keys');
-  if (strip) {
-    strip.innerHTML = ACTIONS
-      .filter(([id]) => KEYS[id])
-      .map(([id, label]) =>
-        `<span><kbd>${prettyKey(KEYS[id])}</kbd> ${label.toLowerCase()}</span>`)
-      .join('');
-  }
 }
 
 const prettyKey = k => ({' ': 'Space', 'arrowleft': '←', 'arrowright': '→',
