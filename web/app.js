@@ -14,6 +14,11 @@
  */
 'use strict';
 
+/* Bumped on every change. Shown next to the title and logged on load, so a
+ * stale deploy or a cached page is obvious rather than being mistaken for the
+ * bug it was supposed to fix. */
+const BUILD = '1.19.2';
+
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
   gif:['gif'], webp:['webp'], tiff:['tif','tiff'], ico:['ico'],
@@ -1189,6 +1194,14 @@ function refit() {
     frameScene(THREE, wrap.clientWidth, wrap.clientHeight);
     renderCube();
   });
+}
+
+/* Announce the build before anything else can fail, so the console always
+ * shows which version is actually running. */
+console.log(`VisManager Web build ${BUILD}`);
+{
+  const el = document.getElementById('ver');
+  if (el) el.textContent = 'build ' + BUILD;
 }
 
 /* Apply the supplied icon set to the buttons. Done in JS rather than inline
