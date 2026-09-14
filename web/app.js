@@ -966,22 +966,6 @@ async function showTgaOffscreen(f) {
   return clone;
 }
 
-/* ── Icons ───────────────────────────────────────────────────────────────
- * Applied once at startup. Buttons whose label changes with state (the nav
- * mode button, the fullscreen toggle) re-apply their own icon when they
- * update, so the icon is never lost to an innerHTML rewrite. */
-function applyIcons() {
-  const map = {
-    bOpen: 'folder', bExport: 'doc', bKeys: 'keyboard',
-    bNote: 'pencil', bFlag: 'flag',
-    bPI: 'file-prev', bNI: 'file-next',
-    bPF: 'folder-prev', bNF: 'folder-next',
-    rotL: 'undo', rotR: 'redo', flipH: 'flip-h', flipV: 'flip-v',
-    zIn: 'expand', zOut: 'collapse', zFull: 'corners',
-  };
-  for (const [id, name] of Object.entries(map)) setIcon(id, name);
-}
-applyIcons();
 
 /* ── Wiring ──────────────────────────────────────────────────────────────── */
 $('bOpen').onclick = () => $('picker').click();
@@ -1295,7 +1279,7 @@ function toggleFullscreen() {
 $('zFull').onclick = toggleFullscreen;
 document.addEventListener('fullscreenchange', () => {
   const on = !!document.fullscreenElement;
-  setIcon('zFull', on ? 'collapse' : 'corners');
+  setBtnIcon('zFull', 'corners');
   // The canvas has a fixed pixel size, so it must be resized to the new box
   setTimeout(() => {
     if (C3.renderer && C3.camera) {

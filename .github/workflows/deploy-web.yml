@@ -31,8 +31,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sanity-check the JavaScript
-        run: node --check web/app.js
+      - name: Check the JavaScript parses
+        run: |
+          for f in web/*.js; do node --check "$f"; done
+
+      - name: Load the page headlessly and exercise it
+        # A ReferenceError early in app.js aborts the whole script: no event
+        # handlers attach and every button silently does nothing, while the
+        # page still looks almost right. Parsing alone does not catch that,
+        # so the page is actually loaded and driven here.
+        run: |
+          npm install jsdom --no-audit --no-fund --silent
+          node web/test/load.test.js
+          node web/test/smoke.test.js
 
       - uses: actions/configure-pages@v5
 
