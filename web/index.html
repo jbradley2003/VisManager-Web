@@ -125,6 +125,9 @@ button.big img{width:21px;height:21px}
   border-radius:6px;padding:4px 9px;margin:3px 3px 0 0;font-size:12px;
   cursor:pointer;user-select:none}
 .chip.off{background:#33333f;color:var(--muted)}
+#loadmode{padding:6px 10px 0;display:flex;flex-direction:column;gap:3px}
+#loadmode button{width:100%}
+#cacheLbl{font-size:10px;min-height:12px}
 #bulk{padding:8px 10px;border-top:1px solid var(--border);display:flex;
   flex-direction:column;gap:6px}
 
@@ -192,6 +195,13 @@ button.big img{width:21px;height:21px}
   color:var(--flag-text)}
 /* Sits below the bar row; its top is set from the measured row height so it
    is never covered, however the bars wrap. */
+#snapMenu{position:absolute;top:60px;left:10px;width:280px;display:none;
+  flex-direction:column;z-index:26;background:rgba(26,26,40,.97);
+  border:1px solid var(--border);border-radius:12px;font-size:12px}
+#snapMenu.on{display:flex}
+#snapMenu select{background:var(--bg-mid);color:var(--text);
+  border:1px solid var(--border);border-radius:6px;padding:4px 6px;font:inherit;
+  font-size:12px}
 #cubePanel{position:absolute;top:60px;left:10px;width:300px;height:420px;
   min-width:240px;min-height:200px;max-width:90vw;max-height:88vh;
   display:none;flex-direction:column;z-index:25;
@@ -349,6 +359,10 @@ progress{width:100%;height:8px}
       <h3>Folders</h3>
       <div id="tree" tabindex="0"></div>
       <div id="types"><h3 style="margin-left:0">File types</h3><div id="chips"></div></div>
+      <div id="loadmode">
+        <button id="bLoadMode" class="sm">Load: one at a time</button>
+        <div id="cacheLbl" class="hint"></div>
+      </div>
       <div id="bulk">
         <button class="keep sm" id="bKeepAll">Keep all in folder</button>
         <button class="del sm" id="bDelAll">Delete all in folder</button>
@@ -379,7 +393,7 @@ progress{width:100%;height:8px}
             <input type="range" id="isoSlide" min="0" max="1000" value="120">
             <span class="gsep"></span>
             <button class="sm" id="isoLock">Lock</button>
-            <button class="sm" id="isoSnap" title="Export this view as PNG">Snapshot</button>
+            <button class="sm" id="isoSnap" title="Export this view as an image">Snapshot ▾</button>
             <button class="sm teal" id="isoMore">Settings…</button>
           </div>
 
@@ -407,6 +421,47 @@ progress{width:100%;height:8px}
           </div>
         </div>
 
+        <div id="snapMenu">
+          <div class="cp-head"><b>Snapshot this view</b>
+            <span style="flex:1"></span>
+            <button class="sm" id="snapClose">✕</button></div>
+          <div class="cp-body" style="overflow:visible">
+            <div class="cp-row"><span>Format</span>
+              <select id="snapFmt">
+                <option value="png">PNG</option>
+                <option value="jpeg">JPEG</option>
+                <option value="webp">WebP</option>
+              </select>
+            </div>
+            <div class="cp-row"><span>Resolution</span>
+              <select id="snapScale">
+                <option value="1">1x</option>
+                <option value="2" selected>2x</option>
+                <option value="3">3x</option>
+                <option value="4">4x</option>
+                <option value="6">6x</option>
+                <option value="8">8x</option>
+              </select>
+              <span id="snapSize" class="hint"></span>
+            </div>
+            <div class="cp-row"><span>Background</span>
+              <select id="snapBg">
+                <option value="scene">As shown</option>
+                <option value="white">White</option>
+                <option value="transparent">Transparent</option>
+              </select>
+            </div>
+            <div class="cp-row">
+              <label class="cp-check"><input type="checkbox" id="snapAll">
+                Every kept cube in this folder</label>
+            </div>
+            <div class="hint" id="snapNote" style="font-size:10px"></div>
+            <div class="cp-row" style="justify-content:flex-end">
+              <button class="sm teal" id="snapGo">Save</button>
+            </div>
+          </div>
+        </div>
+
         <div id="cubePanel">
           <div class="cp-head" id="cpDrag">
             <b>Isosurface</b>
@@ -430,14 +485,6 @@ progress{width:100%;height:8px}
               <label class="cp-check"><input type="checkbox" id="cpAtoms" checked> atoms</label>
               <label class="cp-check"><input type="checkbox" id="cpBonds" checked> bonds</label>
               <label class="cp-check"><input type="checkbox" id="cpH" checked> H</label>
-            </div>
-            <div class="cp-row">
-              <label class="cp-check"><input type="checkbox" id="cpTop">
-                Structure always on top</label>
-            </div>
-            <div class="hint" style="font-size:10px;margin:-2px 0 6px">
-              Atoms inside a lobe are seen through it and pick up its colour.
-              Tick this to draw them at true colour over the surface.
             </div>
             <label>Surface smoothing <span id="cpSmoothVal" class="val"></span></label>
             <input type="range" id="cpSmooth" min="0" max="20" value="0">

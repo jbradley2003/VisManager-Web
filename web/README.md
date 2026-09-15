@@ -63,6 +63,11 @@ transparent objects by bounding-sphere centre — two orbital lobes share almost
 the same centre, so that sort flips as the camera moves and the colours appear
 to swap.
 
+**Load mode** in the sidebar switches between reading each cube when you open
+it and parsing the whole folder in the background. The cache is bounded by
+bytes (280 MB) and evicts least-recently-used entries, because a downsampled
+96³ grid is 3.4 MB and a folder of fifty would otherwise be 169 MB.
+
 **Cube files render in 3D** with a full control panel — isovalue, opacity,
 lobe colours, per-element atom colours, structure scale, hydrogen and bond
 toggles, background presets, and Front/Side/Top view buttons. Press `I` or

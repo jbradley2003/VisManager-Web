@@ -38,7 +38,7 @@ const store = {
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.34.0';
+const BUILD = '1.36.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -64,6 +64,7 @@ const S = {
   fi: 0, ii: 0,       // folder index, image index
   showToken: 0,       // bumped per display; stale async work checks it
   cubeLocks: new Map(),  // path -> pinned isovalue, camera and appearance
+  loadMode: localStorage.getItem('vm.loadMode') || 'lazy',
   navMode: store.get('vm.navMode') || 'continuous',
   zoom: 1, fit: 1, ox: 0, oy: 0, rot: 0, mirror: false,
   url: null, el: null, natural: [0, 0],
@@ -266,6 +267,10 @@ function stillCurrent(token) {
 
 async function show() {
   const token = ++S.showToken;
+  if (S.loadMode === 'folder' && S.folders[S.fi] !== lastPrefetched) {
+    lastPrefetched = S.folders[S.fi];
+    prefetchFolder();
+  }
   drawTree(); drawStats();
   const f = curFile();
   const view = $('view');
@@ -341,6 +346,7 @@ function place(el, w, h) {
   swapIn(el);
   $('finfo').textContent = `${f_info()} │ ${w} × ${h}`;
 }
+let lastPrefetched = null;
 let busyTimer = null;
 function showBusy(f) {
   clearTimeout(busyTimer);
@@ -529,7 +535,7 @@ const C3 = {renderer: null, scene: null, camera: null, root: null,
             flat: false, showAtoms: true, showBonds: true,
             elementColors: {},          // {atomicNumber: 0xrrggbb}
             atomScale: 1.0, showH: true, showPos: true, showNeg: true,
-            smooth: 0, bondTol: 0.45, structureOnTop: false,
+            smooth: 0, bondTol: 0.45,
             locks: {},               // {path: {iso, rot, dist, pan}}
             // Graphics settings
             quality: 'high', brightness: 1.0, tone: true,
@@ -553,15 +559,12 @@ async function showCube(f, token) {
   }
 
   await new Promise(r => setTimeout(r, 0));       // let the message paint
-  const text = await f.file.text();
-  // Reading a large cube can take seconds; bail if the selection moved on.
-  if (token !== undefined && !stillCurrent(token)) return;
-  const full = CubeLib.parseCube(text);
-  // Striding keeps the slider interactive on production-sized grids
-  const grid = CubeLib.downsample(full, 96);
+  const grid = await loadGrid(f, token);
+  if (!grid) return;                     // stale, or the read failed
   if (token !== undefined && !stillCurrent(token)) return;
   C3.grid = grid;
   C3.reduced = grid.reducedBy || 1;
+  const full = {dims: grid.dims.map(d => d * (grid.reducedBy || 1))};
   const lock = S.cubeLocks.get(f.path);
   C3.iso = lock ? lock.iso : CubeLib.chooseIsovalue(grid.values);
   buildCubeScene(three, grid);
@@ -602,7 +605,8 @@ function buildCubeScene(THREE, grid) {
       C3.renderer.dispose();
       C3.renderer.domElement.remove();
     }
-    C3.renderer = new THREE.WebGLRenderer({antialias: C3.aa, alpha: false});
+    C3.renderer = new THREE.WebGLRenderer({antialias: C3.aa,
+                                           alpha: !!C3.alpha});
     C3.rendererAA = C3.aa;
   }
   C3.renderer.setPixelRatio(Math.min(devicePixelRatio, C3.pixelCap));
@@ -908,16 +912,6 @@ function restyle() {
       m.needsUpdate = true;
     }
   }
-  // "On top" draws the structure after the surfaces with depth testing off,
-  // so enclosed atoms keep their true colour instead of being seen through
-  // tinted glass. Off by default because the tinted view is the physically
-  // honest one: it shows which atoms the lobe actually encloses.
-  const top = C3.structureOnTop;
-  for (const m of [...C3.atomMeshes, ...C3.bondMeshes]) {
-    m.renderOrder = top ? 30 : 0;
-    m.material.depthTest = !top;
-    m.material.needsUpdate = true;
-  }
   for (const m of C3.atomMeshes) {
     m.visible = C3.showAtoms && (m.userData.z !== 1 || C3.showH);
     m.material.color.setHex(C3.elementColors[m.userData.z] ??
@@ -963,7 +957,6 @@ function syncPanel() {
   $('cpPosOn').checked = C3.showPos;
   $('cpNegOn').checked = C3.showNeg;
   $('cpH').checked = C3.showH;
-  $('cpTop').checked = C3.structureOnTop;
   $('cpBright').value = Math.round(C3.brightness * 100);
   $('cpBrightVal').textContent = Math.round(C3.brightness * 100) + '%';
   gqNote();
@@ -1443,6 +1436,29 @@ $('bInvert').onclick = () => bulk(v => !v);
  * out of date the first time someone rebinds a key.
  */
 
+/**
+ * Export formats a file can actually produce.
+ *
+ * Driven by what the app can decode, not by a fixed list: a cube renders to
+ * an image but cannot become a PDF page directly, and TIFF/DDS have no decoder
+ * so they can only be copied as they are.
+ */
+function formatsFor(f) {
+  if (!f) return [];
+  if (f.type === 'cube') {
+    return [['png', 'PNG image'], ['jpeg', 'JPEG image'], ['webp', 'WebP image']];
+  }
+  if (f.type === 'pdf') {
+    return [['pdf', 'PDF (copy)'], ['png', 'PNG of page 1'],
+            ['jpeg', 'JPEG of page 1'], ['webp', 'WebP of page 1']];
+  }
+  if (NATIVE.has(f.type) || f.type === 'tga') {
+    return [['png', 'PNG'], ['jpeg', 'JPEG'], ['webp', 'WebP'],
+            ['pdf', 'PDF (single page)']];
+  }
+  return [['copy', 'Copy original']];      // no decoder for this type
+}
+
 function buildOneFileRow() {
   const f = curFile();
   const sel = $('xOneFmt');
@@ -1593,6 +1609,121 @@ $('view').addEventListener('contextmenu', e => {
   if (C3.grid) e.preventDefault();
 });
 
+/* ── Parsed-cube cache ────────────────────────────────────────────────────
+ *
+ * Reading and parsing a cube is the slow part of showing one — a 370 MB file
+ * takes seconds, and the surface extraction on top of that. Caching the parsed
+ * grid makes revisiting a file immediate.
+ *
+ * A downsampled 96^3 grid is 3.4 MB, so fifty of them is 169 MB: the cache is
+ * bounded by bytes and evicts least-recently-used entries rather than growing
+ * until the tab is killed.
+ */
+const CUBE_CACHE_BYTES = 280 * 1024 * 1024;
+const cubeCache = new Map();          // path -> {grid, bytes}; insertion = LRU order
+let prefetchRun = 0;                  // cancels an in-flight folder prefetch
+
+function cacheBytes() {
+  let n = 0;
+  for (const e of cubeCache.values()) n += e.bytes;
+  return n;
+}
+
+function cachePut(path, grid) {
+  const bytes = grid.values.byteLength;
+  if (bytes > CUBE_CACHE_BYTES) return;        // single file too big to hold
+  cubeCache.delete(path);
+  cubeCache.set(path, {grid, bytes});
+  while (cacheBytes() > CUBE_CACHE_BYTES && cubeCache.size > 1) {
+    const oldest = cubeCache.keys().next().value;
+    cubeCache.delete(oldest);
+  }
+  updateCacheLabel();
+}
+
+function cacheGet(path) {
+  const hit = cubeCache.get(path);
+  if (!hit) return null;
+  cubeCache.delete(path);                      // refresh recency
+  cubeCache.set(path, hit);
+  return hit.grid;
+}
+
+/** Read and parse one cube, using the cache when possible. */
+async function loadGrid(file, token) {
+  const hit = cacheGet(file.path);
+  if (hit) return hit;
+  const text = await file.file.text();
+  if (token !== undefined && !stillCurrent(token)) return null;
+  const grid = CubeLib.downsample(CubeLib.parseCube(text), 96);
+  cachePut(file.path, grid);
+  return grid;
+}
+
+function updateCacheLabel() {
+  const el = $('cacheLbl');
+  if (!el) return;
+  const n = cubeCache.size;
+  el.textContent = n
+    ? `${n} cube(s) cached · ${(cacheBytes() / 1048576).toFixed(0)} MB`
+    : '';
+}
+
+function setLoadMode(mode) {
+  S.loadMode = mode;
+  localStorage.setItem('vm.loadMode', mode);
+  refreshLoadBtn();
+  if (mode === 'folder') prefetchFolder();
+  else prefetchRun++;                          // cancel any running prefetch
+}
+
+function refreshLoadBtn() {
+  const b = $('bLoadMode');
+  if (!b) return;
+  const whole = S.loadMode === 'folder';
+  b.textContent = whole ? 'Load: whole folder' : 'Load: one at a time';
+  b.className = 'sm ' + (whole ? 'teal' : '');
+  b.title = whole
+    ? 'Cube files in this folder are parsed in the background so moving ' +
+      'between them is immediate'
+    : 'Each cube is read only when you open it';
+}
+
+/**
+ * Parse the current folder's cubes in the background.
+ *
+ * Sequential rather than parallel: these are large reads, and running them at
+ * once competes with the file the user is actually looking at. Each step
+ * yields so the UI stays responsive, and the run is abandoned if the folder
+ * changes or the mode is switched off.
+ */
+async function prefetchFolder() {
+  const run = ++prefetchRun;
+  const folder = S.folders[S.fi];
+  const cubes = (S.byFolder.get(folder) || []).filter(f => f.type === 'cube');
+  if (!cubes.length) { updateCacheLabel(); return; }
+
+  for (let i = 0; i < cubes.length; i++) {
+    if (run !== prefetchRun || S.loadMode !== 'folder') return;
+    const f = cubes[i];
+    if (cubeCache.has(f.path)) continue;
+    const el = $('cacheLbl');
+    if (el) el.textContent = `caching ${i + 1}/${cubes.length}…`;
+    try {
+      const text = await f.file.text();
+      if (run !== prefetchRun) return;
+      cachePut(f.path, CubeLib.downsample(CubeLib.parseCube(text), 96));
+    } catch (err) {
+      console.warn('prefetch failed for', f.name, err);
+    }
+    await new Promise(r => setTimeout(r, 0));   // let the UI breathe
+  }
+  updateCacheLabel();
+}
+
+$('bLoadMode').onclick = () =>
+  setLoadMode(S.loadMode === 'folder' ? 'lazy' : 'folder');
+
 /**
  * Pin a cube's isovalue, camera and appearance.
  *
@@ -1624,7 +1755,7 @@ function cubeLockState() {
     iso: C3.iso, opacity: C3.opacity, pos: C3.pos, neg: C3.neg, bg: C3.bg,
     atomScale: C3.atomScale, showH: C3.showH, showAtoms: C3.showAtoms,
     showBonds: C3.showBonds, showPos: C3.showPos, showNeg: C3.showNeg,
-    smooth: C3.smooth, structureOnTop: C3.structureOnTop,
+    smooth: C3.smooth,
     rot: {x: r.x, y: r.y, z: r.z},
     dist: C3.dist, panX: C3.panX || 0, panY: C3.panY || 0,
   };
@@ -1637,7 +1768,6 @@ function applyCubeLock(lock) {
     bg: lock.bg, atomScale: lock.atomScale, showH: lock.showH,
     showAtoms: lock.showAtoms, showBonds: lock.showBonds,
     showPos: lock.showPos, showNeg: lock.showNeg, smooth: lock.smooth,
-    structureOnTop: !!lock.structureOnTop,
   });
   if (C3.root) {
     C3.root.rotation.set(lock.rot.x, lock.rot.y, lock.rot.z);
@@ -1677,31 +1807,117 @@ function refreshLockBtn() {
     : 'Pin this isovalue, colours and camera angle to this file';
 }
 
-/** Export the cube on screen, at its current orientation. */
-async function snapshotCurrentCube() {
-  const f = curFile();
-  if (!f || !C3.grid || !C3.renderer) return;
-  const scale = cubeScale;
+/* ── Snapshot ─────────────────────────────────────────────────────────────
+ *
+ * Renders the 3D view to an image at a chosen size, format and background,
+ * either for the cube on screen or for every kept cube in the folder. A
+ * transparent background needs an alpha context, which is fixed when the
+ * WebGL context is created, so the renderer is rebuilt for that case.
+ */
+function snapSizeNote() {
+  const stage = $('stagebox');
+  const sc = +$('snapScale').value;
+  const w = Math.round(Math.max(64, stage.clientWidth) * sc);
+  const h = Math.round(Math.max(64, stage.clientHeight) * sc);
+  $('snapSize').textContent = `${w} x ${h} px`;
+  const all = $('snapAll').checked;
+  const jpegAlpha = $('snapBg').value === 'transparent' &&
+                    $('snapFmt').value === 'jpeg';
+  $('snapNote').textContent = jpegAlpha
+    ? 'JPEG has no transparency; the background will be white.'
+    : all
+      ? 'Locked cubes are rendered from their pinned angle; the rest use ' +
+        'the current one.'
+      : '';
+}
+for (const id of ['snapScale', 'snapFmt', 'snapBg', 'snapAll'])
+  $(id).onchange = snapSizeNote;
+
+$('isoSnap').onclick = () => {
+  $('snapMenu').classList.toggle('on');
+  if ($('snapMenu').classList.contains('on')) snapSizeNote();
+};
+$('snapClose').onclick = () => $('snapMenu').classList.remove('on');
+$('snapMenu').addEventListener('wheel', e => e.stopPropagation(), {passive: true});
+$('snapMenu').addEventListener('pointerdown', e => e.stopPropagation());
+
+/** Render the current scene to a blob at the requested size and background. */
+async function renderSnapshot(scale, fmt, bg) {
   const stage = $('stagebox');
   const w = Math.max(64, stage.clientWidth) * scale;
   const h = Math.max(64, stage.clientHeight) * scale;
-  const btn = $('isoSnap');
-  const label = btn.textContent;
-  btn.textContent = 'Rendering…';
-  try {
-    C3.renderer.setSize(w, h, false);
-    C3.camera.aspect = w / h;
-    C3.camera.updateProjectionMatrix();
-    C3.renderer.render(C3.scene, C3.camera);
-    const blob = await new Promise(r => C3.renderer.domElement.toBlob(r, 'image/png'));
-    if (blob) download(f.name.replace(/\.[^.]+$/, '') + `_${scale}x.png`, blob);
-  } finally {
-    btn.textContent = label;
-    resizeViewer();               // restore the on-screen size
+  const wantAlpha = bg === 'transparent' && fmt !== 'jpeg';
+
+  const savedBg = C3.bg;
+  if (bg === 'white') C3.bg = 0xffffff;
+
+  if (wantAlpha !== !!C3.alpha) {
+    C3.alpha = wantAlpha;
+    C3.aa = C3.aa;                       // force the renderer to be rebuilt
+    C3.rendererAA = null;
+    buildCubeScene(C3.THREE, C3.grid);
+  } else if (bg === 'white') {
+    C3.scene.background.setHex(0xffffff);
   }
+  if (wantAlpha && C3.scene) C3.scene.background = null;
+
+  C3.renderer.setSize(w, h, false);
+  C3.camera.aspect = w / h;
+  C3.camera.updateProjectionMatrix();
+  C3.renderer.render(C3.scene, C3.camera);
+
+  const mime = {png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp'}[fmt];
+  const blob = await new Promise(r => C3.renderer.domElement.toBlob(r, mime, 0.95));
+
+  C3.bg = savedBg;
+  if (C3.scene && !wantAlpha) C3.scene.background = new C3.THREE.Color(savedBg);
+  return blob;
 }
+
+$('snapGo').onclick = async () => {
+  if (!C3.grid) return;
+  const scale = +$('snapScale').value;
+  const fmt = $('snapFmt').value;
+  const bg = $('snapBg').value;
+  const ext = fmt === 'jpeg' ? 'jpg' : fmt;
+  const btn = $('snapGo');
+  const label = btn.textContent;
+  btn.disabled = true;
+
+  try {
+    if (!$('snapAll').checked) {
+      btn.textContent = 'Rendering…';
+      const f = curFile();
+      const blob = await renderSnapshot(scale, fmt, bg);
+      if (blob) download(`${f.name.replace(/\.[^.]+$/, '')}_${scale}x.${ext}`, blob);
+    } else {
+      const folder = S.folders[S.fi];
+      const cubes = (S.byFolder.get(folder) || [])
+        .filter(f => f.type === 'cube' && S.state.get(f.path));
+      const THREE = await loadThree();
+      for (let i = 0; i < cubes.length; i++) {
+        const f = cubes[i];
+        btn.textContent = `${i + 1}/${cubes.length}…`;
+        const grid = await loadGrid(f);
+        if (!grid) continue;
+        const lock = S.cubeLocks.get(f.path);
+        C3.grid = grid;
+        C3.iso = lock ? lock.iso : CubeLib.chooseIsovalue(grid.values);
+        buildCubeScene(THREE, grid);
+        if (lock) applyCubeLock(lock);
+        const blob = await renderSnapshot(scale, fmt, bg);
+        if (blob) download(`${f.name.replace(/\.[^.]+$/, '')}_${scale}x.${ext}`, blob);
+      }
+      await show();                    // put the viewer back where it was
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+    resizeViewer();
+  }
+};
+
 $('isoLock').onclick = toggleCubeLock;
-$('isoSnap').onclick = snapshotCurrentCube;
 
 /* Isosurface controls */
 $('isoUp').onclick = () => rebuildIso(C3.iso * 1.35);
@@ -1825,7 +2041,6 @@ $('cpFlat').onchange = e => { C3.flat = e.target.checked; restyle(); };
 $('cpPosOn').onchange = e => { C3.showPos = e.target.checked; restyle(); };
 $('cpNegOn').onchange = e => { C3.showNeg = e.target.checked; restyle(); };
 $('cpH').onchange = e => { C3.showH = e.target.checked; restyle(); };
-$('cpTop').onchange = e => { C3.structureOnTop = e.target.checked; restyle(); };
 $('cpScale').oninput = e => {
   C3.atomScale = +e.target.value / 100;
   $('cpScaleVal').textContent = e.target.value + '%';
@@ -2148,6 +2363,9 @@ $('noteDel').onclick = () => {
   show();
 };
 $('noteCancel').onclick = () => $('dNote').close();
+
+$('bHelp').onclick = () => $('dHelp').showModal();
+$('helpClose').onclick = () => $('dHelp').close();
 
 $('bNotes').onclick = openNotes;
 $('notesClose').onclick = () => $('dNotes').close();
