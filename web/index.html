@@ -142,11 +142,7 @@ button.big img{width:21px;height:21px}
 #view{position:absolute;inset:0;cursor:grab}
 /* Crisp 1px outline tracking the image bounds. Drawn as its own element
    because a border on the image would be scaled by the zoom transform. */
-#stageGrip{position:absolute;right:0;bottom:0;width:18px;height:18px;z-index:30;
-  cursor:nwse-resize;
-  background:linear-gradient(135deg,transparent 45%,var(--border) 45%,
-    var(--border) 56%,transparent 56%,transparent 68%,var(--border) 68%,
-    var(--border) 79%,transparent 79%)}
+
 /* One line when the viewer owns the window: the bars have room, and wrapping
    would push the stage down for no reason. */
 #topbars.flat{flex-wrap:nowrap;overflow-x:auto;gap:6px}
@@ -248,6 +244,22 @@ body.footmin #acts button img{width:15px;height:15px}
 dialog{background:var(--bg-dark);color:var(--text);border:1px solid var(--border);
   border-radius:12px;padding:0;max-width:620px;width:92%}
 dialog::backdrop{background:rgba(0,0,0,.6)}
+.convRow{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px}
+.convRow span{flex:1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.convRow select{background:var(--bg-mid);color:var(--text);border:1px solid
+  var(--border);border-radius:6px;padding:4px 6px;font:inherit;font-size:12px}
+button.xres.on{background:var(--teal)}
+.noteItem{border:1px solid var(--border);border-radius:9px;padding:9px 11px;
+  margin:7px 0;cursor:pointer;background:rgba(255,255,255,.02)}
+.noteItem:hover{background:rgba(79,142,247,.16);border-color:var(--accent)}
+.noteItem .nf{font-weight:700;display:flex;gap:8px;align-items:center}
+.noteItem .np{font-size:11px;color:var(--muted)}
+.noteItem .nt{margin-top:5px;white-space:pre-wrap;color:var(--flag-text);
+  font-size:12px}
+.noteItem .badge{font-size:10px;padding:1px 6px;border-radius:5px;
+  background:var(--nav);color:#fff;font-weight:700}
+.noteItem .badge.del{background:var(--del)}
 .krow{display:flex;align-items:center;gap:10px;margin:4px 0}
 .krow span{flex:1;color:var(--muted)}
 .kbtn{min-width:110px}
@@ -290,7 +302,8 @@ progress{width:100%;height:8px}
       <span class="s-del" id="sDel">0</span>
       <span class="s-flag" id="sFlag"></span>
       <span class="s-tot" id="sTot"></span>
-      <button id="bKeys" class="big" title="Edit shortcuts (click to rebind)"></button>
+      <button id="bKeys" class="big" title="Edit shortcuts">Shortcuts</button>
+      <button id="bNotes" class="big" title="All notes and flags">Notes</button>
       <button id="bHelp" class="big" title="Help">?</button>
       <button id="bExport" class="teal big" disabled title="Export…">Export…</button>
     </div>
@@ -317,7 +330,7 @@ progress{width:100%;height:8px}
       </div>
       <div id="bar"><div></div></div>
       <div id="viewwrap">
-        <div id="stagebox"><div id="imgframe"></div><div id="stageGrip" title="Drag to resize the stage"></div><div id="view"><div id="placeholder">
+        <div id="stagebox"><div id="imgframe"></div><div id="view"><div id="placeholder">
           <b>VisManager</b>
           Pick a folder, or drag one onto this window.<br>
           Your files are read as copies and never modified.
@@ -466,13 +479,39 @@ progress{width:100%;height:8px}
   <div class="dbody">
     <p class="hint">Nothing on disk is touched. These are downloads built from
       the copies in memory.</p>
+
+    <div class="cp-row" style="margin-top:0">
+      <b style="flex:1">Outputs</b>
+      <button id="xAll" class="sm">All</button>
+      <button id="xNone" class="sm">None</button>
+    </div>
     <div class="row"><label><input type="checkbox" id="xZip" checked> ZIP of kept files</label></div>
     <div class="row"><label><input type="checkbox" id="xPdf" checked> Combined PDF of kept images</label></div>
     <div class="row"><label><input type="checkbox" id="xPdfEach"> One PDF per folder</label></div>
     <div class="row"><label><input type="checkbox" id="xPdfFile"> One PDF per file</label></div>
     <div class="row"><label><input type="checkbox" id="xNotes" checked> Notes report (.txt)</label></div>
     <div class="row"><label><input type="checkbox" id="xList" checked> Delete list (.txt)</label></div>
-    <div class="hint" id="xSummary"></div>
+    <div class="row"><label><input type="checkbox" id="xCubes"> 3D snapshots of kept cube files</label></div>
+
+    <div id="xCubeOpts" style="display:none;margin:2px 0 0 22px">
+      <div class="cp-row"><span>Resolution</span>
+        <button class="sm xres" data-s="1">1x</button>
+        <button class="sm xres" data-s="2">2x</button>
+        <button class="sm xres" data-s="3">3x</button>
+        <button class="sm xres" data-s="4">4x</button>
+        <span id="xResNote" class="hint"></span>
+      </div>
+      <div class="row"><label><input type="checkbox" id="xCubeWhite"> White background</label></div>
+      <p class="hint">Rendered with the current isovalue, colours and camera
+        angle. Each cube is re-read and re-extracted, so this is the slow part.</p>
+    </div>
+
+    <div class="cp-row" style="margin-top:14px"><b style="flex:1">Convert images</b></div>
+    <p class="hint" style="margin-top:0">Per folder, convert the kept images to
+      another format. "Keep original" leaves them untouched in the ZIP.</p>
+    <div id="xConvert"></div>
+
+    <div class="hint" id="xSummary" style="margin-top:12px"></div>
     <progress id="xProg" value="0" max="100" style="display:none"></progress>
     <div class="hint" id="xStatus"></div>
   </div>
@@ -480,6 +519,18 @@ progress{width:100%;height:8px}
     <button id="xCancel" class="sm">Close</button>
     <button id="xGo" class="primary sm">Export</button>
   </div>
+</dialog>
+
+<dialog id="dNotes">
+  <h2>Notes and flags</h2>
+  <div class="dbody">
+    <div class="cp-row" style="margin-top:0">
+      <span id="notesCount" class="hint" style="flex:1"></span>
+      <button id="notesCopy" class="sm">Copy report</button>
+    </div>
+    <div id="notesList"></div>
+  </div>
+  <div class="dfoot"><button id="notesClose" class="sm">Close</button></div>
 </dialog>
 
 <dialog id="dAdd">

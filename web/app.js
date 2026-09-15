@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.28.0';
+const BUILD = '1.29.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -968,7 +968,6 @@ function refreshNavModeBtn() {
   if (!b) return;
   const wrap = S.navMode === 'wrap';
   b.textContent = wrap ? 'Wrap in folder' : 'Continuous (all folders)';
-  setBtnIcon('bNavMode', wrap ? 'nav-wrap' : 'nav-cont', 26);
   b.className = 'sm ' + (wrap ? 'primary' : 'teal');
   // Rewriting textContent above drops the <kbd>, so put it back here rather
   // than relying on the caller's ordering.
@@ -1069,9 +1068,7 @@ async function runExport() {
   const kept = S.files.filter(f => S.state.get(f.path));
   const prog = $('xProg'), status = $('xStatus');
   prog.style.display = 'block'; prog.value = 0;
-  const steps = [$('xZip').checked, $('xPdf').checked, $('xPdfEach').checked,
-                 $('xPdfFile').checked, $('xNotes').checked,
-                 $('xList').checked].filter(Boolean).length || 1;
+  const steps = X_BOXES.filter(id => $(id).checked).length || 1;
   let done = 0;
   const tick = msg => { status.textContent = msg; prog.value = (done / steps) * 100; };
 
@@ -1088,7 +1085,19 @@ async function runExport() {
   if ($('xZip').checked) {
     tick(`zipping ${kept.length} files…`);
     const zip = new JSZip();
-    for (const f of kept) zip.file(f.path, f.file);
+    for (const f of kept) {
+      const target = convertChoice.get(f.folder);
+      const convertible = NATIVE.has(f.type) || f.type === 'tga';
+      if (!target || !convertible) { zip.file(f.path, f.file); continue; }
+      status.textContent = `converting ${f.name} to ${target.toUpperCase()}…`;
+      const out = await convertFile(f, target);
+      if (out) {
+        const base = f.path.replace(/\.[^.]+$/, '');
+        zip.file(`${base}.${target === 'jpeg' ? 'jpg' : target}`, out);
+      } else {
+        zip.file(f.path, f.file);       // conversion failed; keep the original
+      }
+    }
     const blob = await zip.generateAsync({type: 'blob', compression: 'STORE'},
       m => { status.textContent = `zipping… ${m.percent.toFixed(0)}%`; });
     download('kept-files.zip', blob);
@@ -1151,6 +1160,15 @@ async function runExport() {
       done++;
     }
   }
+  if ($('xCubes').checked) {
+    const n = await exportCubeSnapshots(kept, cubeScale, $('xCubeWhite').checked,
+                                        status, frac => {
+      prog.value = ((done + frac) / steps) * 100;
+    });
+    status.textContent = `${n} snapshot(s) written`;
+    done++;
+  }
+
   prog.value = 100;
   status.textContent = 'Done.';
 }
@@ -1171,6 +1189,77 @@ async function buildPdf(files, onProgress) {
   }
   if (!added) return null;
   return new Blob([await pdf.save()], {type: 'application/pdf'});
+}
+
+/** Re-encode one image to another format, or wrap it in a single-page PDF. */
+async function convertFile(f, target) {
+  if (target === 'pdf') {
+    const blob = await buildPdf([f]);
+    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+  }
+  const cv = await toCanvas(f);
+  if (!cv) return null;
+  const mime = {png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp'}[target];
+  const blob = await new Promise(r => cv.toBlob(r, mime, 0.92));
+  return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+}
+
+/** Decode any supported raster into a canvas. */
+async function toCanvas(f) {
+  if (f.type === 'tga') return showTgaOffscreen(f).catch(() => null);
+  const bitmap = await createImageBitmap(f.file).catch(() => null);
+  if (!bitmap) return null;
+  const cv = document.createElement('canvas');
+  cv.width = bitmap.width; cv.height = bitmap.height;
+  cv.getContext('2d').drawImage(bitmap, 0, 0);
+  return cv;
+}
+
+/**
+ * Render each kept cube to a PNG at the chosen multiplier.
+ *
+ * Every cube is re-read and its surface re-extracted, so this is by far the
+ * slowest export; it is off by default for that reason.
+ */
+async function exportCubeSnapshots(kept, scale, white, status, onStep) {
+  const cubes = kept.filter(f => f.type === 'cube');
+  if (!cubes.length) { status.textContent = 'no cube files kept'; return 0; }
+  const THREE = await loadThree();
+  if (!THREE) { status.textContent = '3D library unavailable'; return 0; }
+
+  const stage = $('stagebox');
+  const w = Math.max(64, stage.clientWidth) * scale;
+  const h = Math.max(64, stage.clientHeight) * scale;
+  const savedBg = C3.bg;
+  if (white) C3.bg = 0xffffff;
+
+  let written = 0;
+  for (let i = 0; i < cubes.length; i++) {
+    const f = cubes[i];
+    status.textContent = `3D snapshot ${i + 1}/${cubes.length} — ${f.name}`;
+    if (onStep) onStep(i / cubes.length);
+    try {
+      const grid = CubeLib.downsample(CubeLib.parseCube(await f.file.text()), 96);
+      C3.grid = grid;
+      C3.iso = CubeLib.chooseIsovalue(grid.values);
+      buildCubeScene(THREE, grid);
+      C3.renderer.setSize(w, h, false);
+      C3.camera.aspect = w / h;
+      C3.camera.updateProjectionMatrix();
+      C3.renderer.render(C3.scene, C3.camera);
+      const blob = await new Promise(r => C3.renderer.domElement.toBlob(r, 'image/png'));
+      if (blob) {
+        download(f.name.replace(/\.[^.]+$/, '') + `_${scale}x.png`, blob);
+        written++;
+      }
+    } catch (err) {
+      console.error('snapshot failed for', f.name, err);
+    }
+  }
+  C3.bg = savedBg;
+  C3.grid = null;                 // leave cube mode as we found it
+  resizeViewer();
+  return written;
 }
 
 async function toPngBytes(f) {
@@ -1241,12 +1330,77 @@ $('noteSave').onclick = () => {
 $('noteDel').onclick = () => { S.notes.delete(curFile().path); $('dNote').close(); show(); };
 $('noteCancel').onclick = () => $('dNote').close();
 
+const CONVERT_TO = [
+  ['', 'Keep original'], ['png', 'PNG'], ['jpeg', 'JPEG'],
+  ['webp', 'WebP'], ['pdf', 'PDF'],
+];
+let cubeScale = 2;
+
+/** Per-folder conversion choices, keyed by folder path. */
+const convertChoice = new Map();
+
+function buildConvertRows() {
+  const box = $('xConvert');
+  box.innerHTML = '';
+  const folders = [...new Set(S.files.filter(f => S.state.get(f.path))
+                                     .map(f => f.folder))];
+  if (!folders.length) {
+    box.innerHTML = '<p class="hint">Nothing kept to convert.</p>';
+    return;
+  }
+  for (const folder of folders) {
+    const n = S.files.filter(f => f.folder === folder && S.state.get(f.path) &&
+                                  (NATIVE.has(f.type) || f.type === 'tga')).length;
+    if (!n) continue;
+    const row = document.createElement('div');
+    row.className = 'convRow';
+    const label = document.createElement('span');
+    label.textContent = `${folder} (${n})`;
+    label.title = folder;
+    const sel = document.createElement('select');
+    for (const [v, t] of CONVERT_TO) {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = t;
+      sel.appendChild(o);
+    }
+    sel.value = convertChoice.get(folder) || '';
+    sel.onchange = () => convertChoice.set(folder, sel.value);
+    row.append(label, sel);
+    box.appendChild(row);
+  }
+}
+
+function syncCubeOpts() {
+  $('xCubeOpts').style.display = $('xCubes').checked ? 'block' : 'none';
+  for (const b of document.querySelectorAll('.xres'))
+    b.classList.toggle('on', +b.dataset.s === cubeScale);
+  const stage = $('stagebox');
+  $('xResNote').textContent =
+    `${Math.round(stage.clientWidth * cubeScale)} x ` +
+    `${Math.round(stage.clientHeight * cubeScale)} px`;
+}
+$('xCubes').onchange = syncCubeOpts;
+for (const b of document.querySelectorAll('.xres'))
+  b.onclick = () => { cubeScale = +b.dataset.s; syncCubeOpts(); };
+
+const X_BOXES = ['xZip', 'xPdf', 'xPdfEach', 'xPdfFile', 'xNotes', 'xList', 'xCubes'];
+$('xAll').onclick = () => {
+  X_BOXES.forEach(id => { $(id).checked = true; });
+  syncCubeOpts();
+};
+$('xNone').onclick = () => {
+  X_BOXES.forEach(id => { $(id).checked = false; });
+  syncCubeOpts();
+};
+
 $('bExport').onclick = () => {
   const kept = S.files.filter(f => S.state.get(f.path)).length;
   const del = S.files.length - kept;
   $('xSummary').textContent =
     `${kept} kept, ${del} marked for deletion, ${S.notes.size} flagged.`;
   $('xStatus').textContent = ''; $('xProg').style.display = 'none';
+  buildConvertRows();
+  syncCubeOpts();
   $('dExport').showModal();
 };
 $('xCancel').onclick = () => $('dExport').close();
@@ -1453,8 +1607,7 @@ console.log(`VisManager Web build ${BUILD}`);
   if (logo && ICONS.logo64) logo.src = ICONS.logo64;
   const map = {
     bPF: 'folder-prev', bPI: 'file-prev', bNI: 'file-next', bNF: 'folder-next',
-    bNote: 'pencil', bFlag: 'flag', bOpen: 'folder', bKeys: 'keyboard',
-    bExport: 'doc', zFull: 'corners',
+    bNote: 'pencil', bFlag: 'flag', bExport: 'doc', zFull: 'corners',
     // These four had their text glyphs stripped and no icon assigned, so they
     // rendered as blank pills.
     rotL: 'undo', rotR: 'redo',
@@ -1542,39 +1695,9 @@ function toggleGroup(top) {
  * Shrinking it gives the controls a narrower row to lay out in, which is what
  * makes them collapse onto a single line; growing it maximises the picture.
  */
-(function stageResize() {
-  const grip = $('stageGrip'), stage = $('stagebox');
-  if (!grip) return;
-  const saved = JSON.parse(localStorage.getItem('vm.stage') || 'null');
-  if (saved) { stage.style.right = saved.r + 'px'; stage.style.bottom = saved.b + 'px'; }
-  let drag = null;
-  grip.addEventListener('pointerdown', e => {
-    const host = $('viewwrap').getBoundingClientRect();
-    const r = stage.getBoundingClientRect();
-    drag = {x: e.clientX, y: e.clientY,
-            right: host.right - r.right, bottom: host.bottom - r.bottom};
-    grip.setPointerCapture(e.pointerId);
-    e.preventDefault();
-  });
-  grip.addEventListener('pointermove', e => {
-    if (!drag) return;
-    const right = Math.max(0, drag.right - (e.clientX - drag.x));
-    const bottom = Math.max(0, drag.bottom - (e.clientY - drag.y));
-    stage.style.right = right + 'px';
-    stage.style.bottom = bottom + 'px';
-    resizeViewer();
-  });
-  grip.addEventListener('pointerup', () => {
-    if (!drag) return;
-    drag = null;
-    localStorage.setItem('vm.stage', JSON.stringify({
-      r: parseInt(stage.style.right, 10) || 14,
-      b: parseInt(stage.style.bottom, 10) || 14,
-    }));
-    resizeViewer();
-    if (C3.grid) refit();
-  });
-})();
+// The stage deliberately has no resize grip of its own: its size follows the
+// sidebar and the bottom panel, so there is one way to change the layout
+// rather than three that can disagree.
 
 /**
  * Re-sync everything to the stage's current size.
@@ -1645,6 +1768,72 @@ function resizeViewer() {
     localStorage.setItem('vm.footH', compact ? 0 : 60);
   });
 })();
+
+/**
+ * Browse every flagged file and jump straight to it.
+ *
+ * Flags are only useful if they can be revisited; scrolling the folder tree
+ * hunting for the ones you marked defeats the point of marking them.
+ */
+function openNotes() {
+  const list = $('notesList');
+  list.innerHTML = '';
+  const entries = [...S.notes.entries()];
+  $('notesCount').textContent = entries.length
+    ? `${entries.length} flagged file(s)`
+    : 'Nothing flagged yet. Press F on a file, or add a note with N.';
+
+  // Group by folder, in the order the folders appear in the review
+  const byFolder = new Map();
+  for (const [path, text] of entries) {
+    const folder = path.split('/').slice(0, -1).join('/') || '(root)';
+    if (!byFolder.has(folder)) byFolder.set(folder, []);
+    byFolder.get(folder).push({path, text});
+  }
+  for (const [folder, items] of byFolder) {
+    const head = document.createElement('div');
+    head.className = 'hint';
+    head.style.marginTop = '10px';
+    head.textContent = folder;
+    list.appendChild(head);
+
+    for (const {path, text} of items) {
+      const file = S.files.find(f => f.path === path);
+      const kept = S.state.get(path);
+      const el = document.createElement('div');
+      el.className = 'noteItem';
+      el.innerHTML =
+        `<div class="nf"><span>${path.split('/').pop()}</span>` +
+        `<span class="badge${kept ? '' : ' del'}">${kept ? 'KEEP' : 'DELETE'}</span>` +
+        (file ? '' : '<span class="badge del">removed</span>') + `</div>` +
+        `<div class="np">${path}</div>` +
+        (text ? `<div class="nt">${text.replace(/[<>&]/g,
+            c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div>` : '');
+      el.onclick = () => {
+        if (!file) return;
+        const fi = S.folders.indexOf(file.folder);
+        if (fi < 0) return;
+        S.fi = fi;
+        S.ii = Math.max(0, S.byFolder.get(file.folder).findIndex(f => f.path === path));
+        $('dNotes').close();
+        show();
+      };
+      list.appendChild(el);
+    }
+  }
+  $('dNotes').showModal();
+}
+$('bNotes').onclick = openNotes;
+$('notesClose').onclick = () => $('dNotes').close();
+$('notesCopy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(notesReport());
+    $('notesCount').textContent = 'Report copied to the clipboard.';
+  } catch (e) {
+    download('vismanager-notes.txt',
+             new Blob([notesReport()], {type: 'text/plain'}));
+  }
+};
 
 /* Sidebar resizing. Width is remembered so the layout survives a reload. */
 (function () {
