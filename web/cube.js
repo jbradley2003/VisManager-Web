@@ -499,6 +499,16 @@ const colorOf = z => ELEMENT_COLOR[z] ?? 0xb0b0b0;
 const radiusOf = z => COVALENT[z] ?? 0.9;
 
 /**
+ * Sphere radius for drawing, which is not the covalent radius.
+ *
+ * Scaling covalent radii directly makes hydrogen a speck: at 0.31 A against
+ * carbon's 0.76 it renders at 41% of a carbon sphere, well below the ~70% that
+ * ball-and-stick models use. Compressing the range keeps the elements
+ * distinguishable while leaving hydrogen visible.
+ */
+const displayRadiusOf = z => 0.35 + 0.45 * radiusOf(z);
+
+/**
  * Infer bonds from interatomic distance.
  *
  * Cube files record positions but no connectivity, so bonds have to be
@@ -546,11 +556,11 @@ if (typeof window !== 'undefined') {
   window.CubeLib = {parseCube, chooseIsovalue, isosurface, inferBonds, downsample,
                     detectUnitScale,
                     weld, smoothMesh, recomputeNormals,
-                    symbolOf, colorOf, radiusOf, BOHR_TO_ANGSTROM};
+                    symbolOf, colorOf, radiusOf, displayRadiusOf, BOHR_TO_ANGSTROM};
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {parseCube, chooseIsovalue, isosurface, inferBonds, downsample,
                     detectUnitScale,
                     weld, smoothMesh, recomputeNormals,
-                    symbolOf, colorOf, radiusOf, BOHR_TO_ANGSTROM};
+                    symbolOf, colorOf, radiusOf, displayRadiusOf, BOHR_TO_ANGSTROM};
 }

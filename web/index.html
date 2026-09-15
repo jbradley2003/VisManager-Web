@@ -269,6 +269,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 .convRow{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px}
 .convRow span{flex:1;color:var(--muted);overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap}
+#xEachType,#xEachScale{background:var(--bg-mid);color:var(--text);
+  border:1px solid var(--border);border-radius:6px;padding:3px 6px;font:inherit;
+  font-size:12px;margin-left:6px}
 .convRow select{background:var(--bg-mid);color:var(--text);border:1px solid
   var(--border);border-radius:6px;padding:4px 6px;font:inherit;font-size:12px}
 button.xres.on{background:var(--teal)}
@@ -428,6 +431,14 @@ progress{width:100%;height:8px}
               <label class="cp-check"><input type="checkbox" id="cpBonds" checked> bonds</label>
               <label class="cp-check"><input type="checkbox" id="cpH" checked> H</label>
             </div>
+            <div class="cp-row">
+              <label class="cp-check"><input type="checkbox" id="cpTop">
+                Structure always on top</label>
+            </div>
+            <div class="hint" style="font-size:10px;margin:-2px 0 6px">
+              Atoms inside a lobe are seen through it and pick up its colour.
+              Tick this to draw them at true colour over the surface.
+            </div>
             <label>Surface smoothing <span id="cpSmoothVal" class="val"></span></label>
             <input type="range" id="cpSmooth" min="0" max="20" value="0">
             <div class="hint" style="font-size:10px;margin:-2px 0 6px">
@@ -529,7 +540,22 @@ progress{width:100%;height:8px}
     <div class="row"><label><input type="checkbox" id="xZip" checked> ZIP of kept files</label></div>
     <div class="row"><label><input type="checkbox" id="xPdf" checked> Combined PDF of kept images</label></div>
     <div class="row"><label><input type="checkbox" id="xPdfEach"> One PDF per folder</label></div>
-    <div class="row"><label><input type="checkbox" id="xPdfFile"> One PDF per file</label></div>
+    <div class="row"><label><input type="checkbox" id="xEach"> One file per kept file, as</label>
+      <select id="xEachType">
+        <option value="pdf">PDF</option>
+        <option value="png">PNG</option>
+        <option value="jpeg">JPEG</option>
+        <option value="webp">WebP</option>
+      </select>
+      <select id="xEachScale">
+        <option value="1">1x</option>
+        <option value="2" selected>2x</option>
+        <option value="3">3x</option>
+        <option value="4">4x</option>
+        <option value="6">6x</option>
+        <option value="8">8x</option>
+      </select>
+    </div>
     <div class="row"><label><input type="checkbox" id="xNotes" checked> Notes report (.txt)</label></div>
     <div class="row"><label><input type="checkbox" id="xList" checked> Delete list (.txt)</label></div>
     <div class="row"><label><input type="checkbox" id="xCubes"> 3D snapshots of kept cube files</label></div>
@@ -540,12 +566,23 @@ progress{width:100%;height:8px}
         <button class="sm xres" data-s="2">2x</button>
         <button class="sm xres" data-s="3">3x</button>
         <button class="sm xres" data-s="4">4x</button>
+        <button class="sm xres" data-s="6">6x</button>
+        <button class="sm xres" data-s="8">8x</button>
         <span id="xResNote" class="hint"></span>
       </div>
       <div class="row"><label><input type="checkbox" id="xCubeWhite"> White background</label></div>
       <p class="hint">Rendered with the current isovalue, colours and camera
         angle. Each cube is re-read and re-extracted, so this is the slow part.</p>
     </div>
+
+    <div class="cp-row" style="margin-top:14px"><b style="flex:1">This file only</b></div>
+    <div class="convRow">
+      <span id="xOneName">nothing selected</span>
+      <select id="xOneFmt"></select>
+      <button id="xOneGo" class="sm teal">Export</button>
+    </div>
+    <p class="hint" style="margin-top:0">Exports just the file on screen, at the
+      resolution above. Cube files render at their current orientation.</p>
 
     <div class="cp-row" style="margin-top:14px"><b style="flex:1">Convert images</b></div>
     <p class="hint" style="margin-top:0">Per folder, convert the kept images to
@@ -675,7 +712,6 @@ progress{width:100%;height:8px}
   <div class="dfoot"><button id="helpClose" class="sm">Close</button></div>
 </dialog>
 
-<script src="icons.js"></script>
 <script src="icons.js"></script>
 <script src="cube.js"></script>
 <script src="app.js"></script>
