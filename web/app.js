@@ -17,7 +17,7 @@
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.29.0';
+const BUILD = '1.31.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -41,6 +41,8 @@ const S = {
   treeRows: [],             // flat list of what is on screen, for arrow keys
   treeCursor: -1,
   fi: 0, ii: 0,       // folder index, image index
+  showToken: 0,       // bumped per display; stale async work checks it
+  cubeLocks: new Map(),  // path -> pinned isovalue, camera and appearance
   navMode: localStorage.getItem('vm.navMode') || 'continuous',
   zoom: 1, fit: 1, ox: 0, oy: 0, rot: 0, mirror: false,
   url: null, el: null, natural: [0, 0],
@@ -229,7 +231,20 @@ function drawStats() {
 }
 
 /* ── Viewing ─────────────────────────────────────────────────────────────── */
+/**
+ * True while `token` is still the display the user is looking at.
+ *
+ * Reading and decoding happen asynchronously, and a slow file can finish long
+ * after the user has moved on — a 370 MB cube in particular. Without this
+ * check the late result overwrites whatever is on screen, so the viewer jumps
+ * back to the cube even though another file is selected.
+ */
+function stillCurrent(token) {
+  return token === S.showToken;
+}
+
 async function show() {
+  const token = ++S.showToken;
   drawTree(); drawStats();
   const f = curFile();
   const view = $('view');
@@ -278,10 +293,10 @@ async function show() {
   layoutOverlays();
   try {
     S.pendingRevoke = staleUrl;
-    if (NATIVE.has(f.type)) await showImage(f);
-    else if (f.type === 'pdf') await showPdf(f);
-    else if (f.type === 'tga') await showTga(f);
-    else if (f.type === 'cube') await showCube(f);
+    if (NATIVE.has(f.type)) await showImage(f, token);
+    else if (f.type === 'pdf') await showPdf(f, token);
+    else if (f.type === 'tga') await showTga(f, token);
+    else if (f.type === 'cube') await showCube(f, token);
     else showUnsupported(f);
   } catch (err) {
     showUnsupported(f, String(err && err.message || err));
@@ -403,28 +418,35 @@ function applyTransform() {
   $('rotLbl').textContent = bits.length ? bits.join(' ') : '—';
 }
 
-function showImage(f) {
+function showImage(f, token) {
   return new Promise((res, rej) => {
     S.url = URL.createObjectURL(f.file);
     const img = new Image();
-    img.onload = () => { place(img, img.naturalWidth, img.naturalHeight); res(); };
+    img.onload = () => {
+      if (!stillCurrent(token)) return res();   // user has moved on
+      place(img, img.naturalWidth, img.naturalHeight);
+      res();
+    };
     img.onerror = () => rej(new Error('the browser could not decode this image'));
     img.src = S.url;
   });
 }
 
-async function showPdf(f) {
+async function showPdf(f, token) {
   if (!window.pdfjsLib) throw new Error('pdf.js did not load');
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
   const buf = await f.file.arrayBuffer();
+  if (!stillCurrent(token)) return;
   const doc = await pdfjsLib.getDocument({data: buf}).promise;
   const page = await doc.getPage(1);
+  if (!stillCurrent(token)) return;
   // 2x for a sharp preview without paying for full print resolution
   const vp = page.getViewport({scale: 2});
   const cv = document.createElement('canvas');
   cv.width = vp.width; cv.height = vp.height;
   await page.render({canvasContext: cv.getContext('2d'), viewport: vp}).promise;
+  if (!stillCurrent(token)) return;
   place(cv, vp.width, vp.height);
   $('finfo').textContent = `${f_info()} │ ${doc.numPages} page(s)`;
 }
@@ -433,8 +455,9 @@ async function showPdf(f) {
  * simple enough that pulling in a dependency is not worth it. Handles
  * uncompressed and RLE truecolour plus greyscale, which covers what render
  * tools emit. */
-async function showTga(f) {
+async function showTga(f, token) {
   const buf = new Uint8Array(await f.file.arrayBuffer());
+  if (token !== undefined && !stillCurrent(token)) return;
   const idLen = buf[0], cmType = buf[1], imgType = buf[2];
   const w = buf[12] | (buf[13] << 8), h = buf[14] | (buf[15] << 8);
   const bpp = buf[16], desc = buf[17];
@@ -486,6 +509,7 @@ const C3 = {renderer: null, scene: null, camera: null, root: null,
             elementColors: {},          // {atomicNumber: 0xrrggbb}
             atomScale: 1.0, showH: true, showPos: true, showNeg: true,
             smooth: 0, bondTol: 0.45,
+            locks: {},               // {path: {iso, rot, dist, pan}}
             // Graphics settings
             quality: 'high', brightness: 1.0, tone: true,
             sphereSeg: [20, 14], cylSeg: 12, pixelCap: 2, aa: true,
@@ -495,8 +519,9 @@ const C3 = {renderer: null, scene: null, camera: null, root: null,
 const hex = n => '#' + n.toString(16).padStart(6, '0');
 const unhex = s2 => parseInt(s2.slice(1), 16);
 
-async function showCube(f) {
+async function showCube(f, token) {
   const three = await loadThree();
+  if (token !== undefined && !stillCurrent(token)) return;
   if (!three) {
     // Report the real reason. Swallowing it left only "did not load", which
     // gives no clue whether the CDN is blocked, offline, or something else.
@@ -508,18 +533,23 @@ async function showCube(f) {
 
   await new Promise(r => setTimeout(r, 0));       // let the message paint
   const text = await f.file.text();
+  // Reading a large cube can take seconds; bail if the selection moved on.
+  if (token !== undefined && !stillCurrent(token)) return;
   const full = CubeLib.parseCube(text);
   // Striding keeps the slider interactive on production-sized grids
   const grid = CubeLib.downsample(full, 96);
+  if (token !== undefined && !stillCurrent(token)) return;
   C3.grid = grid;
   C3.reduced = grid.reducedBy || 1;
-  C3.iso = CubeLib.chooseIsovalue(grid.values);
+  const lock = S.cubeLocks.get(f.path);
+  C3.iso = lock ? lock.iso : CubeLib.chooseIsovalue(grid.values);
   buildCubeScene(three, grid);
   $('finfo').textContent =
     `${f_info()} │ grid ${full.dims.join('×')}` +
     (C3.reduced > 1 ? ` (shown at 1/${C3.reduced})` : '') +
     ` │ ${grid.atoms.length} atoms │ iso ±${C3.iso.toFixed(4)}`;
   showIsoControls(true);
+  refreshLockBtn();
 }
 
 let THREE_PROMISE = null;
@@ -600,6 +630,9 @@ function buildCubeScene(THREE, grid) {
   addMolecule(THREE, root, grid);
 
   frameScene(THREE, w, h);
+  const f = curFile();
+  // Restore a pinned view, if this file has one
+  if (f && S.cubeLocks.has(f.path)) applyCubeLock(S.cubeLocks.get(f.path));
   renderCube();
 }
 
@@ -771,6 +804,7 @@ function rebuildIso(newIso) {
     addIsoSurfaces(THREE, C3.root, C3.grid, newIso);
     $('isoLbl').textContent = isoLabel(newIso);
     $('cpIsoVal').textContent = isoLabel(newIso);
+    updateLockIfActive();
     renderCube();
   });
 }
@@ -916,6 +950,7 @@ function showIsoControls(on) {
   layoutOverlays();
   if (on && C3.grid) {
     C3.peak = Math.max(Math.abs(C3.grid.range[0]), Math.abs(C3.grid.range[1]));
+    refreshLockBtn();
     const sl = $('isoSlide');
     sl.min = 0; sl.max = 1000;
     sl.value = isoToSlider(C3.iso, C3.peak);
@@ -1240,9 +1275,11 @@ async function exportCubeSnapshots(kept, scale, white, status, onStep) {
     if (onStep) onStep(i / cubes.length);
     try {
       const grid = CubeLib.downsample(CubeLib.parseCube(await f.file.text()), 96);
+      const lock = S.cubeLocks.get(f.path);
       C3.grid = grid;
-      C3.iso = CubeLib.chooseIsovalue(grid.values);
+      C3.iso = lock ? lock.iso : CubeLib.chooseIsovalue(grid.values);
       buildCubeScene(THREE, grid);
+      if (lock) applyCubeLock(lock);       // render from the pinned angle
       C3.renderer.setSize(w, h, false);
       C3.camera.aspect = w / h;
       C3.camera.updateProjectionMatrix();
@@ -1279,7 +1316,7 @@ async function toPngBytes(f) {
 }
 async function showTgaOffscreen(f) {
   const keep = $('view').innerHTML;
-  await showTga(f);
+  await showTga(f);            // no token: this render is for export, not display
   const cv = $('view').querySelector('canvas');
   const clone = document.createElement('canvas');
   clone.width = cv.width; clone.height = cv.height;
@@ -1312,7 +1349,87 @@ $('bDropFolder').onclick = () => {
 $('bKeepAll').onclick = () => bulk(() => true);
 $('bDelAll').onclick = () => bulk(() => false);
 $('bInvert').onclick = () => bulk(v => !v);
-$('bHelp').onclick = () => $('dHelp').showModal();
+/**
+ * Help is built at open time rather than written into the markup, so the
+ * shortcut table always reflects the current bindings instead of drifting
+ * out of date the first time someone rebinds a key.
+ */
+function buildHelp() {
+  const key = id => `<kbd>${prettyKey(KEYS[id] || '?')}</kbd>`;
+  const rows = ACTIONS.filter(([id]) => KEYS[id])
+    .map(([id, label]) => `<tr><td>${key(id)}</td><td>${label}</td></tr>`)
+    .join('');
+  const dnd = S.files.length
+    ? `${S.files.length} file(s) loaded from ${S.rootName}.`
+    : 'Nothing loaded yet.';
+
+  $('helpBody').innerHTML = `
+    <h3>What this is</h3>
+    <p>A reviewer for folders of images, PDFs and Gaussian cube files. You mark
+       each file Keep or Delete, flag the ones worth revisiting, then export the
+       result. ${dnd}</p>
+    <p><b>Your files are never modified.</b> They are read as copies, so
+       "Delete" only means "leave out of the exports and list in the delete
+       report". Nothing on disk changes unless you run that report yourself.</p>
+
+    <h3>Getting files in</h3>
+    <p>Use <b>Open folder</b> or drag a folder onto the window. Loading a second
+       folder asks whether to add to the current list or replace it; adding
+       keeps the marks and notes you have already made.</p>
+    <p>The sidebar groups folders, and each can be expanded to show its files.
+       Click the tree then use the arrow keys to move through it; Enter selects,
+       Left and Right collapse and expand. Right-click a folder or file to drop
+       it from the review entirely.</p>
+
+    <h3>Formats</h3>
+    <table>
+      <tr><td>PNG, JPEG, GIF, WebP, BMP, ICO</td><td>rendered by the browser</td></tr>
+      <tr><td>PDF</td><td>first page, via pdf.js</td></tr>
+      <tr><td>TGA</td><td>decoded in-page, including RLE</td></tr>
+      <tr><td>Cube (.cube, .cub)</td><td>3D isosurfaces, see below</td></tr>
+      <tr><td>TIFF, DDS</td><td>listed and markable, no preview</td></tr>
+    </table>
+
+    <h3>Cube files</h3>
+    <p>Positive and negative lobes are drawn as separate surfaces over a
+       ball-and-stick structure. Drag with the left button to orbit, the right
+       button to reposition, and scroll to zoom. The isovalue starts at 5% of
+       the peak amplitude and the slider is logarithmic, because cube values
+       span orders of magnitude.</p>
+    <p><b>Lock view</b> saves this file's orientation and isovalue and restores
+       them whenever you return to it — useful when the angle is part of what
+       you are judging. <b>Snapshot</b> exports exactly what is on screen at up
+       to 4x resolution.</p>
+    <p>Large grids are strided down for interactivity; the footer says when,
+       for example "grid 300x300x300 (shown at 1/4)". Bond detection uses
+       covalent radii with valence limits, and the units are inferred from the
+       geometry rather than the file's own flag, which writers disagree about.</p>
+
+    <h3>Exports</h3>
+    <table>
+      <tr><td>ZIP</td><td>every kept file, folder structure preserved, optionally converted to another format per folder</td></tr>
+      <tr><td>PDF</td><td>combined, one per folder, or one per file</td></tr>
+      <tr><td>Notes report</td><td>flagged files and their notes, grouped by folder</td></tr>
+      <tr><td>Delete list</td><td>paths you marked, with the command to act on them</td></tr>
+      <tr><td>3D snapshots</td><td>each kept cube rendered to PNG at 1x to 4x</td></tr>
+    </table>
+
+    <h3>Notes and flags</h3>
+    <p><b>Notes</b> in the toolbar lists everything flagged, grouped by folder,
+       and clicking an entry jumps straight to that file.</p>
+
+    <h3>Layout</h3>
+    <p>Drag the divider beside the folder list or above the button row to trade
+       space with the viewer; drag the button row small and it collapses to a
+       single compact line. <b>Expand</b> hides the panels, and F11 is true
+       fullscreen.</p>
+
+    <h3>Shortcuts</h3>
+    <p>All rebindable from the <b>Shortcuts</b> button.</p>
+    <table>${rows}</table>`;
+}
+
+$('bHelp').onclick = () => { buildHelp(); $('dHelp').showModal(); };
 $('helpClose').onclick = () => $('dHelp').close();
 
 $('bNote').onclick = () => {
@@ -1417,6 +1534,116 @@ $('view').addEventListener('contextmenu', e => {
   if (C3.grid) e.preventDefault();
 });
 
+/**
+ * Pin a cube's isovalue, camera and appearance.
+ *
+ * Orientation is part of the result for an orbital: the angle that shows a
+ * lobe clearly is chosen by eye and is worth keeping. A locked file restores
+ * exactly what you left, and batch export renders it from that same view
+ * rather than a default one.
+ */
+/** Pinned views survive a reload; they represent real work. */
+function saveLocks() {
+  try {
+    localStorage.setItem('vm.cubeLocks',
+      JSON.stringify([...S.cubeLocks.entries()]));
+  } catch (e) { /* storage full or blocked; locks stay in memory */ }
+}
+
+function loadLocks() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('vm.cubeLocks') || '[]');
+    S.cubeLocks = new Map(raw);
+  } catch (e) {
+    S.cubeLocks = new Map();
+  }
+}
+
+function cubeLockState() {
+  if (!C3.root || !C3.camera) return null;
+  const r = C3.root.rotation;
+  return {
+    iso: C3.iso, opacity: C3.opacity, pos: C3.pos, neg: C3.neg, bg: C3.bg,
+    atomScale: C3.atomScale, showH: C3.showH, showAtoms: C3.showAtoms,
+    showBonds: C3.showBonds, showPos: C3.showPos, showNeg: C3.showNeg,
+    smooth: C3.smooth,
+    rot: {x: r.x, y: r.y, z: r.z},
+    dist: C3.dist, panX: C3.panX || 0, panY: C3.panY || 0,
+  };
+}
+
+function applyCubeLock(lock) {
+  if (!lock) return;
+  Object.assign(C3, {
+    iso: lock.iso, opacity: lock.opacity, pos: lock.pos, neg: lock.neg,
+    bg: lock.bg, atomScale: lock.atomScale, showH: lock.showH,
+    showAtoms: lock.showAtoms, showBonds: lock.showBonds,
+    showPos: lock.showPos, showNeg: lock.showNeg, smooth: lock.smooth,
+  });
+  if (C3.root) {
+    C3.root.rotation.set(lock.rot.x, lock.rot.y, lock.rot.z);
+    C3.panX = lock.panX; C3.panY = lock.panY;
+    if (C3.centerOffset) {
+      C3.root.position.x = -C3.centerOffset.x + lock.panX;
+      C3.root.position.y = -C3.centerOffset.y + lock.panY;
+    }
+  }
+  if (C3.camera) {
+    C3.dist = lock.dist;
+    C3.camera.position.setZ(lock.dist);
+    C3.camera.updateProjectionMatrix();
+  }
+}
+
+function toggleCubeLock() {
+  const f = curFile();
+  if (!f || f.type !== 'cube' || !C3.grid) return;
+  if (S.cubeLocks.has(f.path)) S.cubeLocks.delete(f.path);
+  else S.cubeLocks.set(f.path, cubeLockState());
+  saveLocks();
+  refreshLockBtn();
+  drawStats();
+}
+
+function refreshLockBtn() {
+  const b = $('isoLock');
+  if (!b) return;
+  const f = curFile();
+  const locked = f && S.cubeLocks.has(f.path);
+  b.textContent = locked ? 'Locked' : 'Lock';
+  b.className = 'sm' + (locked ? ' primary' : '');
+  b.title = locked
+    ? 'This view is pinned: isovalue, colours and camera are restored, and ' +
+      'batch export uses this angle. Click to unpin.'
+    : 'Pin this isovalue, colours and camera angle to this file';
+}
+
+/** Export the cube on screen, at its current orientation. */
+async function snapshotCurrentCube() {
+  const f = curFile();
+  if (!f || !C3.grid || !C3.renderer) return;
+  const scale = cubeScale;
+  const stage = $('stagebox');
+  const w = Math.max(64, stage.clientWidth) * scale;
+  const h = Math.max(64, stage.clientHeight) * scale;
+  const btn = $('isoSnap');
+  const label = btn.textContent;
+  btn.textContent = 'Rendering…';
+  try {
+    C3.renderer.setSize(w, h, false);
+    C3.camera.aspect = w / h;
+    C3.camera.updateProjectionMatrix();
+    C3.renderer.render(C3.scene, C3.camera);
+    const blob = await new Promise(r => C3.renderer.domElement.toBlob(r, 'image/png'));
+    if (blob) download(f.name.replace(/\.[^.]+$/, '') + `_${scale}x.png`, blob);
+  } finally {
+    btn.textContent = label;
+    resizeViewer();               // restore the on-screen size
+  }
+}
+$('isoLock').onclick = toggleCubeLock;
+$('isoSnap').onclick = snapshotCurrentCube;
+
 /* Isosurface controls */
 $('isoUp').onclick = () => rebuildIso(C3.iso * 1.35);
 $('isoDown').onclick = () => rebuildIso(C3.iso / 1.35);
@@ -1432,7 +1659,7 @@ $('isoSlide').oninput = e => {
   clearTimeout(isoTimer);
   isoTimer = setTimeout(() => rebuildIso(target), 180);
 };
-$('isoReset').onclick = () => {
+$('isoRecentre').onclick = () => {
   if (!C3.root) return;
   C3.root.rotation.set(0, 0, 0);
   renderCube();
@@ -1459,6 +1686,7 @@ function cubeOp(op) {
   else if (op === 'v') C3.root.rotateX(HALF);
   else { C3.root.rotation.set(0, 0, 0); refit(); }
   renderCube();
+  updateLockIfActive();
   updateCubeOrientLabel();
 }
 
@@ -1479,6 +1707,7 @@ function cubeZoom(factor) {
   C3.camera.position.setZ(C3.dist);
   C3.camera.updateProjectionMatrix();
   renderCube();
+  updateLockIfActive();
   $('zlbl').textContent = C3.homeDist
     ? Math.round(C3.homeDist / C3.dist * 100) + '%' : 'Fit';
 }
@@ -2011,6 +2240,7 @@ $('view').addEventListener('pointermove', e => {
     C3.drag = {x: e.clientX, y: e.clientY, pan: C3.drag.pan};
     if (C3.drag.pan) panScene(dx, dy); else orbitScene(dx, dy);
     renderCube();
+    updateLockIfActive();
     return;
   }
   if (!panning) return;
@@ -2050,6 +2280,8 @@ const ACTIONS = [
   ['navMode',  'Continuous / wrap',   'w'],
   ['remove',   'Remove from review',  'x'],
   ['expandWin','Expand to window',    'e'],
+  ['lock',     'Lock cube view',      'l'],
+  ['snap',     'Snapshot cube',       's'],
 ];
 const DEFAULT_KEYS = Object.fromEntries(ACTIONS.map(([id, , k]) => [id, k]));
 
@@ -2078,6 +2310,8 @@ const HANDLERS = {
   navMode: () => setNavMode(S.navMode === 'wrap' ? 'continuous' : 'wrap'),
   remove: () => $('bDrop').click(),
   expandWin: () => toggleExpanded(),
+  lock: () => toggleLock(),
+  snap: () => snapshotCurrentCube(),
 };
 
 /**
@@ -2242,6 +2476,7 @@ function walk(entry, prefix, out) {
 /* Final wiring. KEYS and ACTIONS are const bindings declared above this
  * point; calling into them any earlier hits the temporal dead zone and the
  * ReferenceError aborts the rest of the script. */
+loadLocks();
 refreshKeyCaps();
 refreshNavModeBtn();
 layoutOverlays();

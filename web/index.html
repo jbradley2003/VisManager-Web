@@ -105,7 +105,11 @@ button.big img{width:21px;height:21px}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fld:hover{background:rgba(255,255,255,.05)}
 .fld.on{background:var(--accent);color:#fff}
-.tw{display:inline-block;width:14px;color:var(--muted);cursor:pointer}
+/* The twisty is the only affordance saying a folder can be opened, so it
+   needs to read against the panel rather than sit at muted-text contrast. */
+.tw{display:inline-block;width:18px;font-size:13px;line-height:1;
+  color:var(--flag-text);cursor:pointer;text-align:center;font-weight:700}
+.tw:hover{color:#fff;text-shadow:0 0 6px rgba(251,191,36,.6)}
 .fld.on .tw{color:#fff}
 .fileRow{padding:3px 6px 3px 34px;border-radius:6px;cursor:pointer;font-size:12px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
@@ -161,13 +165,29 @@ button.big img{width:21px;height:21px}
 /* One row for every overlay control. They used to be positioned absolutely at
    the same coordinates, so the isosurface bar and the rotate/zoom bar drew on
    top of each other and both covered the settings panel. */
+/* Controls are grouped by what they act on, each group boxed and labelled,
+   so the row reads as three tools rather than a line of loose buttons. */
 #topbars{position:absolute;top:8px;left:10px;right:10px;z-index:15;
-  display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
-#zoombar{margin-left:auto;display:flex;gap:6px;
-  background:rgba(30,30,46,.85);padding:6px;border-radius:10px}
-#imgbar{display:none;gap:6px;
-  align-items:center;background:rgba(30,30,46,.88);padding:6px 10px;
-  border-radius:10px}
+  display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.grp{display:flex;gap:5px;align-items:center;
+  background:rgba(30,30,46,.92);border:1px solid var(--border);
+  border-radius:11px;padding:5px 9px}
+.glabel{font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);font-weight:700;margin-right:3px}
+.gsep{width:1px;height:20px;background:var(--border);margin:0 3px}
+#topbars.flat .glabel{display:none}
+#topbars.flat .grp{padding:3px 6px;gap:3px}
+/* Each bar is a labelled group. Without the labels the row reads as one long
+   undifferentiated strip of icons. */
+#topbars > div{position:relative}
+#topbars > div[data-label]::before{content:attr(data-label);position:absolute;
+  top:-7px;left:10px;font-size:9px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);background:var(--keep-bg);padding:0 4px;border-radius:3px;
+  pointer-events:none}
+#topbars.flat > div[data-label]::before{display:none}
+#isobar,#imgbar,#zoombar,#cubebar{border:1px solid var(--border)}
+#zoombar{margin-left:auto}
+#imgbar{display:none}
 #rotLbl{min-width:56px;text-align:center;font-size:12px;font-weight:700;
   color:var(--flag-text)}
 /* Sits below the bar row; its top is set from the measured row height so it
@@ -207,9 +227,11 @@ button.big img{width:21px;height:21px}
 .cp-el{display:flex;flex-direction:column;align-items:center;gap:2px}
 .cp-el b{font-size:11px;color:var(--text)}
 .val{color:var(--flag-text);font-weight:700}
-#isobar{display:none;gap:8px;
-  align-items:center;background:rgba(30,30,46,.88);padding:6px 10px;
-  border-radius:10px}
+#cubebar{display:none;gap:6px;align-items:center;
+  background:rgba(30,30,46,.88);padding:6px 10px;border-radius:10px}
+#snapRes{background:var(--bg-mid);color:var(--text);border:1px solid var(--border);
+  border-radius:6px;padding:4px 6px;font:inherit;font-size:12px}
+#isobar{display:none}
 #isoLbl{min-width:74px;text-align:center;font-weight:700;font-size:12px;
   color:var(--flag-text)}
 #isoSlide{width:130px}
@@ -250,6 +272,13 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 .convRow select{background:var(--bg-mid);color:var(--text);border:1px solid
   var(--border);border-radius:6px;padding:4px 6px;font:inherit;font-size:12px}
 button.xres.on{background:var(--teal)}
+#helpBody h3{margin:16px 0 4px;font-size:13px;color:var(--accent)}
+#helpBody h3:first-child{margin-top:0}
+#helpBody p{margin:4px 0;font-size:12px;line-height:1.5}
+#helpBody table{width:100%;border-collapse:collapse;font-size:12px;margin:4px 0}
+#helpBody td{padding:3px 6px;border-bottom:1px solid var(--border);
+  vertical-align:top}
+#helpBody td:first-child{white-space:nowrap;color:var(--muted);width:35%}
 .noteItem{border:1px solid var(--border);border-radius:9px;padding:9px 11px;
   margin:7px 0;cursor:pointer;background:rgba(255,255,255,.02)}
 .noteItem:hover{background:rgba(79,142,247,.16);border-color:var(--accent)}
@@ -265,6 +294,9 @@ button.xres.on{background:var(--teal)}
 .kbtn{min-width:110px}
 .kbtn.listening{background:var(--flag)}
 dialog h2{margin:0;padding:14px 20px;background:var(--bg-mid);font-size:17px}
+.dbody h3{margin:16px 0 4px;font-size:13px;color:var(--accent)}
+.dbody h3:first-of-type{margin-top:8px}
+.dbody p{margin:4px 0}
 .dbody{padding:18px 20px;max-height:60vh;overflow:auto}
 .dfoot{padding:12px 20px;background:var(--bg-mid);display:flex;gap:8px;
   justify-content:flex-end}
@@ -336,33 +368,42 @@ progress{width:100%;height:8px}
           Your files are read as copies and never modified.
         </div></div></div>
         <div id="topbars">
-        <div id="isobar">
-          <span class="hint">Isosurface</span>
-          <button class="sm" id="isoDown">−</button>
-          <span id="isoLbl">—</span>
-          <button class="sm" id="isoUp">+</button>
-          <input type="range" id="isoSlide" min="0" max="1000" value="120">
-          <button class="sm" id="isoReset">Recentre</button>
-          <button class="sm teal" id="isoMore">Settings…</button>
+          <div id="isobar" class="grp">
+            <span class="glabel">Isosurface</span>
+            <button class="sm" id="isoDown">&minus;</button>
+            <span id="isoLbl">—</span>
+            <button class="sm" id="isoUp">+</button>
+            <input type="range" id="isoSlide" min="0" max="1000" value="120">
+            <span class="gsep"></span>
+            <button class="sm" id="isoLock">Lock</button>
+            <button class="sm" id="isoSnap" title="Export this view as PNG">Snapshot</button>
+            <button class="sm teal" id="isoMore">Settings…</button>
+          </div>
+
+          <div id="imgbar" class="grp">
+            <span class="glabel">Orient</span>
+            <button class="sm" id="rotL" title="Rotate left"></button>
+            <button class="sm" id="rotR" title="Rotate right"></button>
+            <button class="sm" id="flipH" title="Flip horizontal"></button>
+            <button class="sm" id="flipV" title="Flip vertical"></button>
+            <span id="rotLbl">—</span>
+            <button class="sm" id="rotReset" title="Reset orientation">Reset</button>
+            <button class="sm" id="isoRecentre" title="Recentre the model">Recentre</button>
+          </div>
+
+          <div id="zoombar" class="grp">
+            <span class="glabel">View</span>
+            <button class="sm" id="zOut" title="Zoom out"></button>
+            <span id="zlbl">Fit</span>
+            <button class="sm" id="zIn" title="Zoom in"></button>
+            <button class="sm" id="zFit" title="Fit to stage">Fit</button>
+            <button class="sm" id="z1" title="Actual size">1:1</button>
+            <span class="gsep"></span>
+            <button class="sm" id="zExpand" title="Expand to window">Expand</button>
+            <button class="sm" id="zFull" title="Fullscreen"></button>
+          </div>
         </div>
-        <div id="imgbar">
-          <button class="sm" id="rotL" title="Rotate left ["></button>
-          <button class="sm" id="rotR" title="Rotate right ]"></button>
-          <button class="sm" id="flipH" title="Flip horizontal H"></button>
-          <button class="sm" id="flipV" title="Flip vertical V"></button>
-          <span id="rotLbl">—</span>
-          <button class="sm" id="rotReset" title="Reset R">Reset</button>
-        </div>
-        <div id="zoombar">
-          <button class="sm" id="zOut" title="Zoom out"></button>
-          <span id="zlbl">Fit</span>
-          <button class="sm" id="zIn" title="Zoom in"></button>
-          <button class="sm" id="zFit">Fit</button>
-          <button class="sm" id="z1">1:1</button>
-          <button class="sm" id="zExpand" title="Expand to window">Expand</button>
-          <button class="sm" id="zFull" title="Fullscreen (F11)"></button>
-        </div>
-        </div>
+
         <div id="cubePanel">
           <div class="cp-head" id="cpDrag">
             <b>Isosurface</b>
@@ -565,22 +606,71 @@ progress{width:100%;height:8px}
 <dialog id="dHelp">
   <h2>VisManager Web</h2>
   <div class="dbody">
-    <p>Review a folder of images, keep the good ones, and export the result.
-       Files are read as <b>copies</b> — nothing on your disk is changed.</p>
-    <h3>Supported</h3>
-    <p class="hint">PNG, JPEG, GIF, WebP, BMP and PDF render natively. TGA is
-      decoded in-page. Cube files are listed but not rendered in the web
-      version — use the desktop app for 3D.</p>
+    <p>Review a folder of images, PDFs and cube files, mark what to keep, and
+      export the result. Files are read as <b>copies</b> — nothing on your disk
+      is ever modified or deleted.</p>
+
+    <h3>Getting files in</h3>
+    <p class="hint">Use <b>Open folder</b> or drag a folder onto the window.
+      The whole tree is read, so subfolders come too. Loading a second folder
+      asks whether to add it to the current review or replace it; adding keeps
+      the marks and notes you have already made.</p>
+
+    <h3>Reviewing</h3>
+    <p class="hint">Every file starts as <b>KEEP</b>. Mark the ones you do not
+      want as <b>DELETE</b> — that only excludes them from the exports and
+      lists them in the delete list, it does not touch the originals.
+      <b>Flag</b> marks a file for follow-up and <b>Note</b> attaches text to
+      it; the <b>Notes</b> button in the toolbar lists everything flagged and
+      jumps to a file when you click it. <b>Remove</b> takes a file out of the
+      review entirely, as though it had not been loaded.</p>
+    <p class="hint"><b>Continuous</b> moves into the next folder when you reach
+      the end of one; <b>Wrap</b> stays inside the current folder.</p>
+
+    <h3>Cube files</h3>
+    <p class="hint">Cubes render as isosurfaces with a ball-and-stick
+      structure. <b>Drag</b> to orbit, <b>right-drag</b> (or Shift-drag) to
+      move the model, <b>scroll</b> to zoom. The isovalue starts at 5% of the
+      peak amplitude and the slider is logarithmic, because cube values span
+      orders of magnitude.</p>
+    <p class="hint"><b>Lock</b> pins the current isovalue, colours and camera
+      angle to that file. Locked files reopen exactly as you left them, and
+      batch export renders them from the pinned angle instead of a default
+      one — worth setting when a particular view shows a lobe clearly.
+      <b>Snapshot</b> exports just the cube on screen, at the resolution
+      chosen in the export dialog.</p>
+    <p class="hint"><b>Settings…</b> covers opacity, lobe and background
+      colours, per-element atom colours, structure scale, hydrogen and bond
+      toggles, surface smoothing, bond tolerance, and graphics quality. The
+      panel can be dragged by its title bar and resized from its corner.</p>
+
+    <h3>Exporting</h3>
+    <p class="hint">The export dialog can write a ZIP of the kept files, a
+      combined PDF, one PDF per folder or per file, a notes report, a delete
+      list, and PNG snapshots of kept cubes at 1x to 4x. Per folder you can
+      convert kept images to PNG, JPEG, WebP or PDF. Use <b>All</b> and
+      <b>None</b> to set the outputs quickly.</p>
+    <p class="hint">To act on the delete list, run it yourself — it ships with
+      the exact command for macOS, Linux and PowerShell.</p>
+
+    <h3>Layout</h3>
+    <p class="hint">Drag the divider beside the folder list to resize it, and
+      the bar above the buttons to resize the control panel; dragging that one
+      small switches the buttons to a compact row. <b>Expand</b> gives the
+      viewer the whole window, <b>F11</b> goes fullscreen. Folders in the
+      sidebar expand to show their files, and the list takes arrow keys when
+      it has focus.</p>
+
     <h3>Shortcuts</h3>
-    <p class="hint">
-      <kbd>K</kbd> keep &nbsp; <kbd>D</kbd> delete &nbsp; <kbd>Space</kbd> toggle &nbsp;
-      <kbd>N</kbd> note &nbsp; <kbd>F</kbd> flag<br>
-      <kbd>←</kbd> <kbd>→</kbd> navigate &nbsp; <kbd>,</kbd> <kbd>.</kbd> folders &nbsp;
-      <kbd>=</kbd> <kbd>-</kbd> zoom &nbsp; <kbd>0</kbd> fit
-    </p>
-    <h3>Exports</h3>
-    <p class="hint">A ZIP of kept files, a combined PDF, a notes report, and a
-      delete list you can run locally to prune the originals.</p>
+    <p class="hint">Every shortcut is printed on its button. Click
+      <b>Shortcuts</b> in the toolbar to rebind any of them; they are stored in
+      this browser.</p>
+
+    <h3>Formats</h3>
+    <p class="hint">PNG, JPEG, GIF, WebP, BMP and ICO render natively, PDF
+      through pdf.js, TGA through a built-in decoder, and Gaussian/ORCA cube
+      files in 3D. TIFF and DDS are listed and can be marked, but not
+      previewed.</p>
   </div>
   <div class="dfoot"><button id="helpClose" class="sm">Close</button></div>
 </dialog>
