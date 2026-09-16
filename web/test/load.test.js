@@ -75,7 +75,7 @@ srv.listen(0, () => {
         stagebox: 'viewwrap', view: 'stagebox', topbars: 'viewwrap',
   // The isosurface controls are docked in the footer with the action buttons,
   // not in the overlay row: they are used constantly while reviewing.
-  isodock: 'foot', isobar: 'isodock', imgbar: 'topbars', zoombar: 'topbars',
+  isodock: 'stage', isobar: 'isodock', imgbar: 'topbars', zoombar: 'topbars',
         cubePanel: 'viewwrap', side: 'main', stage: 'main', tree: 'side',
       };
       const wrong = [];

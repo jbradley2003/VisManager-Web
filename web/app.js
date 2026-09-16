@@ -38,7 +38,7 @@ const store = {
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.39.0';
+const BUILD = '1.40.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -602,12 +602,19 @@ async function showCube(f, token) {
   const full = {dims: grid.dims.map(d => d * (grid.reducedBy || 1))};
   const lock = S.cubeLocks.get(f.path);
   C3.iso = lock ? lock.iso : CubeLib.chooseIsovalue(grid.values);
+
+  // Reveal the controls and settle the layout BEFORE building the scene.
+  // Showing them afterwards changes the stage height, leaving the canvas sized
+  // to the old dimensions — the image then stays stretched until something
+  // else triggers a resize, which is why dragging the panel "fixed" it.
+  showIsoControls(true);
+  layoutOverlays();
+
   buildCubeScene(three, grid);
   $('finfo').textContent =
     `${f_info()} │ grid ${full.dims.join('×')}` +
     (C3.reduced > 1 ? ` (shown at 1/${C3.reduced})` : '') +
     ` │ ${grid.atoms.length} atoms │ iso ±${C3.iso.toFixed(4)}`;
-  showIsoControls(true);
   refreshLockBtn();
 }
 
@@ -1030,8 +1037,10 @@ function isoLabel(iso) {
 function showIsoControls(on) {
   // Docked in the footer now: hide the whole dock, so the row collapses
   // cleanly instead of leaving an empty gap above the buttons.
+  const was = $('isodock').style.display;
   $('isodock').style.display = on ? 'flex' : 'none';
   $('isobar').style.display = on ? 'flex' : 'none';
+  if (was !== $('isodock').style.display) resizeViewer();
   // The 2D zoom controls are meaningless for a 3D scene
   // Both toolbars stay up for cubes — their buttons drive the camera instead
   // of the bitmap, matching the desktop build.

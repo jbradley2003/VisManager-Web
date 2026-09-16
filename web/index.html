@@ -258,8 +258,7 @@ button.big img{width:21px;height:21px}
 #footGrip:hover::after{background:var(--accent)}
 body.footmin #foot{padding:2px 10px}
 body.footmin #fname,body.footmin #finfo,body.footmin #note,
-body.footmin #state,body.footmin #keys,body.footmin #modebar,
-body.footmin #isodock{display:none}
+body.footmin #state,body.footmin #keys,body.footmin #modebar{display:none}
 body.footmin #acts button{padding:5px 9px;font-size:12px}
 body.footmin #acts button img{width:15px;height:15px}
 #fname{text-align:center;font-weight:700}
@@ -268,7 +267,10 @@ body.footmin #acts button img{width:15px;height:15px}
 #acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
 /* The isosurface controls live with the buttons: they are used constantly
    while reviewing, and at the top they competed with the view controls. */
-#isodock{display:flex;justify-content:center;margin:2px 0 6px}
+/* Its own strip between the viewer and the control panel: next to the model
+   it acts on, and unaffected when the panel is collapsed. */
+#isodock{display:flex;justify-content:center;padding:6px 10px;
+  background:var(--bg-mid);border-top:1px solid var(--border);flex-shrink:0}
 #isodock .grp{background:rgba(255,255,255,.04)}
 #modebar{display:flex;justify-content:center;margin-top:6px}
 #bNavMode{padding:8px 16px;font-size:13px}
@@ -516,6 +518,19 @@ progress{width:100%;height:8px}
           <div id="cpGrip" title="Drag to resize"></div>
         </div>
       </div>
+      <div id="isodock">
+          <div id="isobar" class="grp">
+            <span class="glabel">Isosurface</span>
+            <button class="sm" id="isoDown">&minus;</button>
+            <span id="isoLbl">—</span>
+            <button class="sm" id="isoUp">+</button>
+            <input type="range" id="isoSlide" min="0" max="1000" value="120">
+            <span class="gsep"></span>
+            <button class="sm" id="isoLock">Lock</button>
+            <button class="sm" id="isoSnap" title="Export this view as an image">Snapshot ▾</button>
+            <button class="sm teal" id="isoMore">Settings…</button>
+          </div>
+        </div>
       <div id="footGrip" title="Drag to resize, double-click to collapse"></div>
       <div id="foot">
         <div id="fname"></div>
@@ -530,19 +545,6 @@ progress{width:100%;height:8px}
           <button id="bDrop" title="Remove this file from the review">Remove</button>
           <button id="bNI" title="Next image"></button>
           <button id="bNF" title="Next folder"></button>
-        </div>
-        <div id="isodock">
-          <div id="isobar" class="grp">
-            <span class="glabel">Isosurface</span>
-            <button class="sm" id="isoDown">&minus;</button>
-            <span id="isoLbl">—</span>
-            <button class="sm" id="isoUp">+</button>
-            <input type="range" id="isoSlide" min="0" max="1000" value="120">
-            <span class="gsep"></span>
-            <button class="sm" id="isoLock">Lock</button>
-            <button class="sm" id="isoSnap" title="Export this view as an image">Snapshot ▾</button>
-            <button class="sm teal" id="isoMore">Settings…</button>
-          </div>
         </div>
         <div id="modebar">
           <button id="bNavMode" class="sm teal"></button>
