@@ -38,7 +38,7 @@ const store = {
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.36.0';
+const BUILD = '1.37.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -1178,7 +1178,10 @@ async function runExport() {
       const convertible = NATIVE.has(f.type) || f.type === 'tga';
       if (!target || !convertible) { zip.file(f.path, f.file); continue; }
       status.textContent = `converting ${f.name} to ${target.toUpperCase()}…`;
-      const out = await convertFile(f, target);
+      const out = target === 'pdf'
+        ? await (async () => { const b = await buildPdf([f]);
+            return b ? new Uint8Array(await b.arrayBuffer()) : null; })()
+        : await encodeImageBytes(f, target);
       if (out) {
         const base = f.path.replace(/\.[^.]+$/, '');
         zip.file(`${base}.${target === 'jpeg' ? 'jpg' : target}`, out);
@@ -1207,7 +1210,7 @@ async function runExport() {
         const blob = await buildPdf([f]);
         if (blob) download(`${base}.pdf`, blob);
       } else {
-        const blob = await rasterise(f, type, mult);
+        const blob = await encodeImage(f, type, mult);
         if (blob) download(`${base}_${mult}x.${type === 'jpeg' ? 'jpg' : type}`, blob);
       }
     }
@@ -1245,7 +1248,7 @@ async function runExport() {
         prog.value = ((done + i / images.length) / steps) * 100;
         // Everything is normalised through a canvas so one code path covers
         // TGA and the formats pdf-lib cannot embed directly.
-        const png = await toPngBytes(f);
+        const png = await encodeImageBytes(f);
         if (!png) continue;
         const img = await pdf.embedPng(png);
         const page = pdf.addPage([img.width, img.height]);
@@ -1275,7 +1278,7 @@ async function buildPdf(files, onProgress) {
   let added = 0;
   for (let i = 0; i < files.length; i++) {
     if (onProgress) onProgress(`${files[i].name} (${i + 1}/${files.length})`);
-    const png = await toPngBytes(files[i]);
+    const png = await encodeImageBytes(files[i]);
     if (!png) continue;
     const img = await pdf.embedPng(png);
     const page = pdf.addPage([img.width, img.height]);
@@ -1286,37 +1289,38 @@ async function buildPdf(files, onProgress) {
   return new Blob([await pdf.save()], {type: 'application/pdf'});
 }
 
+
+
 /**
- * Re-encode an image at a multiple of its own size.
+ * Encode a file as an image blob, optionally scaled.
  *
- * Upscaling is done once on a canvas rather than by the encoder, so the same
- * path serves every raster target and the multiplier means the same thing for
- * all of them.
+ * This replaces three near-identical helpers that each decoded to a canvas and
+ * re-encoded with slightly different arguments. One path means one place to
+ * fix when a format behaves unexpectedly.
+ *
+ *   type  'png' | 'jpeg' | 'webp'
+ *   mult  size multiplier; 1 leaves the source size alone
  */
-async function rasterise(f, type, mult) {
+async function encodeImage(f, type = 'png', mult = 1) {
   const src = await toCanvas(f);
   if (!src) return null;
-  const cv = document.createElement('canvas');
-  cv.width = Math.round(src.width * mult);
-  cv.height = Math.round(src.height * mult);
-  const ctx = cv.getContext('2d');
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(src, 0, 0, cv.width, cv.height);
+  let cv = src;
+  if (mult !== 1) {
+    cv = document.createElement('canvas');
+    cv.width = Math.round(src.width * mult);
+    cv.height = Math.round(src.height * mult);
+    const ctx = cv.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, cv.width, cv.height);
+  }
   const mime = {png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp'}[type];
   return new Promise(r => cv.toBlob(r, mime, 0.92));
 }
 
-/** Re-encode one image to another format, or wrap it in a single-page PDF. */
-async function convertFile(f, target) {
-  if (target === 'pdf') {
-    const blob = await buildPdf([f]);
-    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
-  }
-  const cv = await toCanvas(f);
-  if (!cv) return null;
-  const mime = {png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp'}[target];
-  const blob = await new Promise(r => cv.toBlob(r, mime, 0.92));
+/** The same, as bytes, for embedding in a PDF. */
+async function encodeImageBytes(f, type = 'png', mult = 1) {
+  const blob = await encodeImage(f, type, mult);
   return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
 }
 
@@ -1343,29 +1347,15 @@ async function exportCubeSnapshots(kept, scale, white, status, onStep) {
   const THREE = await loadThree();
   if (!THREE) { status.textContent = '3D library unavailable'; return 0; }
 
-  const stage = $('stagebox');
-  const w = Math.max(64, stage.clientWidth) * scale;
-  const h = Math.max(64, stage.clientHeight) * scale;
-  const savedBg = C3.bg;
-  if (white) C3.bg = 0xffffff;
-
+  // Sizing and background are renderSnapshot's job now.
   let written = 0;
   for (let i = 0; i < cubes.length; i++) {
     const f = cubes[i];
     status.textContent = `3D snapshot ${i + 1}/${cubes.length} — ${f.name}`;
     if (onStep) onStep(i / cubes.length);
     try {
-      const grid = CubeLib.downsample(CubeLib.parseCube(await f.file.text()), 96);
-      const lock = S.cubeLocks.get(f.path);
-      C3.grid = grid;
-      C3.iso = lock ? lock.iso : CubeLib.chooseIsovalue(grid.values);
-      buildCubeScene(THREE, grid);
-      if (lock) applyCubeLock(lock);       // render from the pinned angle
-      C3.renderer.setSize(w, h, false);
-      C3.camera.aspect = w / h;
-      C3.camera.updateProjectionMatrix();
-      C3.renderer.render(C3.scene, C3.camera);
-      const blob = await new Promise(r => C3.renderer.domElement.toBlob(r, 'image/png'));
+      if (!await stageCube(f, THREE)) continue;
+      const blob = await renderSnapshot(scale, 'png', white ? 'white' : 'scene');
       if (blob) {
         download(f.name.replace(/\.[^.]+$/, '') + `_${scale}x.png`, blob);
         written++;
@@ -1374,27 +1364,11 @@ async function exportCubeSnapshots(kept, scale, white, status, onStep) {
       console.error('snapshot failed for', f.name, err);
     }
   }
-  C3.bg = savedBg;
   C3.grid = null;                 // leave cube mode as we found it
   resizeViewer();
   return written;
 }
 
-async function toPngBytes(f) {
-  let cv;
-  if (f.type === 'tga') {
-    await showTgaOffscreen(f).then(c => cv = c).catch(() => cv = null);
-  } else {
-    const bitmap = await createImageBitmap(f.file).catch(() => null);
-    if (!bitmap) return null;
-    cv = document.createElement('canvas');
-    cv.width = bitmap.width; cv.height = bitmap.height;
-    cv.getContext('2d').drawImage(bitmap, 0, 0);
-  }
-  if (!cv) return null;
-  const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
-  return new Uint8Array(await blob.arrayBuffer());
-}
 async function showTgaOffscreen(f) {
   const keep = $('view').innerHTML;
   await showTga(f);            // no token: this render is for export, not display
@@ -1482,7 +1456,7 @@ async function exportCurrentFile() {
   status.textContent = `exporting ${f.name}…`;
   try {
     if (f.type === 'cube') {
-      await snapshotCurrentCube();
+      $('isoSnap').click();
     } else if (fmt === 'pdf') {
       const blob = await buildPdf([f]);
       if (blob) download(f.name.replace(/\.[^.]+$/, '') + '.pdf', blob);
@@ -1784,6 +1758,21 @@ function applyCubeLock(lock) {
   }
 }
 
+/**
+ * Keep a pinned view current while it is pinned.
+ *
+ * Adjusting the isovalue or camera on a locked file should update the pin,
+ * otherwise Lock silently means "as of when you clicked it" and the next
+ * export uses a stale view.
+ */
+function updateLockIfActive() {
+  const f = curFile();
+  if (!f || f.type !== 'cube' || !C3.grid) return;
+  if (!S.cubeLocks.has(f.path)) return;
+  const state = cubeLockState();
+  if (state) { S.cubeLocks.set(f.path, state); saveLocks(); }
+}
+
 function toggleCubeLock() {
   const f = curFile();
   if (!f || f.type !== 'cube' || !C3.grid) return;
@@ -1840,6 +1829,24 @@ $('isoSnap').onclick = () => {
 $('snapClose').onclick = () => $('snapMenu').classList.remove('on');
 $('snapMenu').addEventListener('wheel', e => e.stopPropagation(), {passive: true});
 $('snapMenu').addEventListener('pointerdown', e => e.stopPropagation());
+
+/**
+ * Load a cube and make it the live scene, honouring its lock.
+ *
+ * Both export paths did this inline with slightly different wording — one
+ * re-read the file, the other used the cache. Sharing it means a locked view
+ * is respected identically wherever a cube is rendered.
+ */
+async function stageCube(file, THREE) {
+  const grid = await loadGrid(file);
+  if (!grid) return false;
+  const lock = S.cubeLocks.get(file.path);
+  C3.grid = grid;
+  C3.iso = lock ? lock.iso : CubeLib.chooseIsovalue(grid.values);
+  buildCubeScene(THREE, grid);
+  if (lock) applyCubeLock(lock);        // render from the pinned angle
+  return true;
+}
 
 /** Render the current scene to a blob at the requested size and background. */
 async function renderSnapshot(scale, fmt, bg) {
@@ -1898,13 +1905,7 @@ $('snapGo').onclick = async () => {
       for (let i = 0; i < cubes.length; i++) {
         const f = cubes[i];
         btn.textContent = `${i + 1}/${cubes.length}…`;
-        const grid = await loadGrid(f);
-        if (!grid) continue;
-        const lock = S.cubeLocks.get(f.path);
-        C3.grid = grid;
-        C3.iso = lock ? lock.iso : CubeLib.chooseIsovalue(grid.values);
-        buildCubeScene(THREE, grid);
-        if (lock) applyCubeLock(lock);
+        if (!await stageCube(f, THREE)) continue;
         const blob = await renderSnapshot(scale, fmt, bg);
         if (blob) download(`${f.name.replace(/\.[^.]+$/, '')}_${scale}x.${ext}`, blob);
       }
@@ -2625,8 +2626,8 @@ const HANDLERS = {
   navMode: () => setNavMode(S.navMode === 'wrap' ? 'continuous' : 'wrap'),
   remove: () => $('bDrop').click(),
   expandWin: () => toggleExpanded(),
-  lock: () => toggleLock(),
-  snap: () => snapshotCurrentCube(),
+  lock: () => toggleCubeLock(),
+  snap: () => $('isoSnap').click(),
 };
 
 /**
