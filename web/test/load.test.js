@@ -73,8 +73,10 @@ srv.listen(0, () => {
       const expectParent = {
         head: 'stage', bar: 'stage', viewwrap: 'stage', foot: 'stage',
         stagebox: 'viewwrap', view: 'stagebox', topbars: 'viewwrap',
+  // The isosurface controls are docked in the footer with the action buttons,
+  // not in the overlay row: they are used constantly while reviewing.
+  isodock: 'foot', isobar: 'isodock', imgbar: 'topbars', zoombar: 'topbars',
         cubePanel: 'viewwrap', side: 'main', stage: 'main', tree: 'side',
-        isobar: 'topbars', imgbar: 'topbars', zoombar: 'topbars',
       };
       const wrong = [];
       for (const [id, parent] of Object.entries(expectParent)) {

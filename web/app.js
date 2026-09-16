@@ -38,7 +38,7 @@ const store = {
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.38.0';
+const BUILD = '1.39.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -1028,6 +1028,9 @@ function isoLabel(iso) {
 }
 
 function showIsoControls(on) {
+  // Docked in the footer now: hide the whole dock, so the row collapses
+  // cleanly instead of leaving an empty gap above the buttons.
+  $('isodock').style.display = on ? 'flex' : 'none';
   $('isobar').style.display = on ? 'flex' : 'none';
   // The 2D zoom controls are meaningless for a 3D scene
   // Both toolbars stay up for cubes — their buttons drive the camera instead
@@ -2180,9 +2183,10 @@ console.log(`VisManager Web build ${BUILD}`);
 function layoutOverlays() {
   const bars = $('topbars'), stage = $('stagebox'), panel = $('cubePanel');
   if (!bars || !stage) return;
-  const h = bars.offsetHeight || 40;
-  stage.style.top = (h + 18) + 'px';
-  if (panel) panel.style.top = (h + 16) + 'px';
+  const h = bars.offsetHeight || 0;
+  stage.style.top = (h ? h + 18 : 14) + 'px';
+  for (const el of [panel, $('snapMenu')])
+    if (el) el.style.top = (h ? h + 16 : 12) + 'px';
 }
 window.addEventListener('resize', layoutOverlays);
 
@@ -2266,6 +2270,12 @@ function resizeViewer() {
   resizeQueued = true;
   requestAnimationFrame(() => {
     resizeQueued = false;
+    // Position the overlays FIRST. layoutOverlays() sets the stage's top from
+    // the measured toolbar height, so running it afterwards resized the stage
+    // out from under a canvas that had just been sized to the old dimensions —
+    // the drawing buffer then no longer matched its CSS box and the scene came
+    // out stretched.
+    layoutOverlays();
     const stage = $('stagebox');
     const w = Math.max(64, stage.clientWidth), h = Math.max(64, stage.clientHeight);
     if (C3.renderer && C3.camera) {
@@ -2275,7 +2285,6 @@ function resizeViewer() {
       renderCube();
     }
     if (S.el) { S.fit = computeFit(); applyTransform(); }
-    layoutOverlays();
   });
 }
 
