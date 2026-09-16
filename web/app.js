@@ -38,7 +38,7 @@ const store = {
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.42.0';
+const BUILD = '1.43.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -623,6 +623,7 @@ async function showCube(f, token) {
     (C3.reduced > 1 ? ` (shown at 1/${C3.reduced})` : '') +
     ` │ ${grid.atoms.length} atoms │ iso ±${C3.iso.toFixed(4)}`;
   refreshLockBtn();
+  settleCubeView();
 }
 
 let THREE_PROMISE = null;
@@ -2329,6 +2330,31 @@ let resizeQueued = false;
  * frameScene picks a distance from the content radius and the field of view;
  * that distance is only right for the aspect it was computed at.
  */
+/**
+ * Re-frame once the browser has actually laid the page out.
+ *
+ * Building the scene measures the stage synchronously, but the strip and
+ * toolbars have only just been shown and their effect on the stage's height
+ * is not final until the next layout pass. Two frames guarantee a settled
+ * box: one for style changes to flush, one for the resulting layout. Without
+ * this the first render uses a stale aspect, and the view only looked right
+ * after some later resize — dragging the panel, say.
+ */
+function settleCubeView() {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!C3.grid || !C3.camera || !C3.renderer) return;
+    const stage = $('stagebox');
+    const w = Math.max(64, stage.clientWidth), h = Math.max(64, stage.clientHeight);
+    C3.renderer.setSize(w, h, true);
+    C3.camera.aspect = w / h;
+    const f = curFile();
+    const pinned = f && S.cubeLocks.has(f.path);
+    if (!pinned && !C3.panX && !C3.panY) refitDistanceForAspect(w, h);
+    C3.camera.updateProjectionMatrix();
+    renderCube();
+  }));
+}
+
 function refitDistanceForAspect(w, h) {
   if (!C3.camera || !C3.contentRadius) return;
   const fov = C3.camera.fov * Math.PI / 180;
