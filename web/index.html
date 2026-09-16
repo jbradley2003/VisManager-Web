@@ -264,7 +264,11 @@ body.footmin #acts button img{width:15px;height:15px}
 #fname{text-align:center;font-weight:700}
 #finfo{text-align:center;font-size:12px;color:var(--muted)}
 #note{text-align:center;font-size:12px;color:var(--flag-text);min-height:17px}
-#acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
+#acts{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-top:8px;
+  min-width:0}
+body.tightbtn #acts button{padding:6px 10px;font-size:12px}
+body.tightbtn #acts button img{width:15px;height:15px}
+body.tightbtn #acts kbd{padding:0 3px;font-size:10px}
 /* The isosurface controls live with the buttons: they are used constantly
    while reviewing, and at the top they competed with the view controls. */
 /* Its own strip between the viewer and the control panel. It carries the
@@ -274,7 +278,12 @@ body.footmin #acts button img{width:15px;height:15px}
 #isodock{display:flex;justify-content:center;padding:7px 10px;
   background:var(--keep-bg);border-bottom:1px solid var(--border);
   flex-shrink:0}
-#isodock .grp{background:rgba(255,255,255,.04)}
+/* Same dark panel as the overlay groups: letting the keep/delete tint show
+   through made this row look like a different kind of control. */
+#isodock .grp{background:rgba(30,30,46,.92);flex-wrap:wrap;
+  justify-content:center;max-width:100%}
+#isodock{min-width:0}
+#isodock #isoSlide{width:130px;min-width:70px}
 #modebar{display:flex;justify-content:center;gap:8px;margin-top:6px;
   flex-wrap:wrap}
 #bNavMode{padding:8px 16px;font-size:13px}

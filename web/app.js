@@ -38,7 +38,7 @@ const store = {
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.41.0';
+const BUILD = '1.42.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -744,6 +744,7 @@ function frameScene(THREE, w, h) {
   C3.camera = cam;
   C3.dist = dist;
   C3.homeDist = dist;
+  C3.contentRadius = sphere.radius;
 }
 
 function addIsoSurfaces(THREE, root, grid, iso) {
@@ -2231,6 +2232,9 @@ function updateBarDensity() {
                 !!document.fullscreenElement;
   $('topbars').classList.toggle('flat', tight);
   $('isodock').classList.toggle('flat', tight);
+  // Below this the action row wraps to three lines and pushes the viewer out
+  // of the window, so the buttons themselves shrink instead.
+  document.body.classList.toggle('tightbtn', w < 1200);
 }
 
 function layoutOverlays() {
@@ -2319,6 +2323,24 @@ function toggleGroup(top) {
  * is what made dragging the panel look like it distorted the view.
  */
 let resizeQueued = false;
+/**
+ * Keep the framing distance consistent as the viewport changes shape.
+ *
+ * frameScene picks a distance from the content radius and the field of view;
+ * that distance is only right for the aspect it was computed at.
+ */
+function refitDistanceForAspect(w, h) {
+  if (!C3.camera || !C3.contentRadius) return;
+  const fov = C3.camera.fov * Math.PI / 180;
+  const fitH = C3.contentRadius / Math.sin(fov / 2);
+  const fitW = fitH / Math.min(1, w / h);
+  const dist = Math.max(fitH, fitW) * 1.15;
+  C3.homeDist = dist;
+  C3.dist = dist;
+  C3.camera.position.setZ(dist);
+  C3.camera.updateProjectionMatrix();
+}
+
 function resizeViewer() {
   if (resizeQueued) return;
   resizeQueued = true;
@@ -2333,9 +2355,19 @@ function resizeViewer() {
     const stage = $('stagebox');
     const w = Math.max(64, stage.clientWidth), h = Math.max(64, stage.clientHeight);
     if (C3.renderer && C3.camera) {
+      const aspectChanged = Math.abs(C3.camera.aspect - w / h) > 1e-4;
       C3.renderer.setSize(w, h, true);
       C3.camera.aspect = w / h;
       C3.camera.updateProjectionMatrix();
+      // A narrower view needs the camera further back to keep the same content
+      // visible. Without this the model appears to drift and clip as the
+      // window changes shape, since the framing distance was computed for the
+      // old aspect. Panned or pinned views are left alone — the user placed
+      // those deliberately.
+      if (aspectChanged && C3.homeDist && !C3.panX && !C3.panY) {
+        const f = curFile();
+        if (!(f && S.cubeLocks.has(f.path))) refitDistanceForAspect(w, h);
+      }
       renderCube();
     }
     if (S.el) { S.fit = computeFit(); applyTransform(); }
@@ -2666,6 +2698,22 @@ $('view').addEventListener('pointerup', () => {
   panning = null; C3.drag = null; $('view').classList.remove('drag');
 });
 window.addEventListener('resize', resizeViewer);
+
+/**
+ * Watch the stage itself rather than guessing when it changes.
+ *
+ * Its size depends on the toolbar row wrapping, the isosurface strip appearing,
+ * the sidebar and panel being dragged, and expand/fullscreen — every one of
+ * which had to remember to call resizeViewer, and missing any left the WebGL
+ * drawing buffer out of step with its CSS box. That mismatch both stretches
+ * the scene and shifts it off centre. Observing the element removes the
+ * ordering problem entirely.
+ */
+if (typeof ResizeObserver !== 'undefined') {
+  const stageObserver = new ResizeObserver(() => resizeViewer());
+  const stageEl = $('stagebox');
+  if (stageEl) stageObserver.observe(stageEl);
+}
 
 /* ── Rebindable shortcuts ────────────────────────────────────────────────
  * Actions are named so the binding can change without touching the handler.
