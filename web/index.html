@@ -267,12 +267,16 @@ body.footmin #acts button img{width:15px;height:15px}
 #acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
 /* The isosurface controls live with the buttons: they are used constantly
    while reviewing, and at the top they competed with the view controls. */
-/* Its own strip between the viewer and the control panel: next to the model
-   it acts on, and unaffected when the panel is collapsed. */
-#isodock{display:flex;justify-content:center;padding:6px 10px;
-  background:var(--bg-mid);border-top:1px solid var(--border);flex-shrink:0}
+/* Its own strip between the viewer and the control panel. It carries the
+   viewer's keep/delete tint rather than the panel's colour, so it reads as
+   part of the stage area — the border sits underneath, separating it from the
+   panel instead of from the viewer. */
+#isodock{display:flex;justify-content:center;padding:7px 10px;
+  background:var(--keep-bg);border-bottom:1px solid var(--border);
+  flex-shrink:0}
 #isodock .grp{background:rgba(255,255,255,.04)}
-#modebar{display:flex;justify-content:center;margin-top:6px}
+#modebar{display:flex;justify-content:center;gap:8px;margin-top:6px;
+  flex-wrap:wrap}
 #bNavMode{padding:8px 16px;font-size:13px}
 #bNavMode img{width:26px;height:26px}
 #state{text-align:center;font-weight:700;margin-top:5px}
@@ -548,6 +552,7 @@ progress{width:100%;height:8px}
         </div>
         <div id="modebar">
           <button id="bNavMode" class="sm teal"></button>
+          <button id="bAuto" class="sm"></button>
         </div>
         <div id="state"></div>
         <div id="keys" class="hint">Shortcuts are shown on the buttons. Click the keyboard button in the toolbar to rebind them.</div>

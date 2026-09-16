@@ -38,7 +38,7 @@ const store = {
 /* Bumped on every change. Shown next to the title and logged on load, so a
  * stale deploy or a cached page is obvious rather than being mistaken for the
  * bug it was supposed to fix. */
-const BUILD = '1.40.0';
+const BUILD = '1.41.0';
 
 const TYPES = {
   tga:['tga'], png:['png'], jpeg:['jpg','jpeg','jpe'], bmp:['bmp','dib'],
@@ -66,6 +66,9 @@ const S = {
   cubeLocks: new Map(),  // path -> pinned isovalue, camera and appearance
   loadMode: localStorage.getItem('vm.loadMode') || 'lazy',
   navMode: store.get('vm.navMode') || 'continuous',
+  // Advancing after a mark suits a first pass; staying put suits comparing
+  // a file with its neighbours.
+  autoAdvance: store.get('vm.autoAdvance', 'on') !== 'off',
   zoom: 1, fit: 1, ox: 0, oy: 0, rot: 0, mirror: false,
   url: null, el: null, natural: [0, 0],
   rootName: ''
@@ -295,7 +298,11 @@ async function show() {
   $('ctx').textContent = `${f.folder}  •  folder ${S.fi + 1} of ${S.folders.length}`;
   $('bar').firstElementChild.style.width = ((S.ii + 1) / list.length * 100) + '%';
   $('fname').textContent = f.name;
-  $('viewwrap').style.background = keep ? 'var(--keep-bg)' : 'var(--del-bg)';
+  // The isosurface strip shares the viewer's tint so the two read as one
+  // area, rather than the strip looking like part of the control panel.
+  const tint = keep ? 'var(--keep-bg)' : 'var(--del-bg)';
+  $('viewwrap').style.background = tint;
+  $('isodock').style.background = tint;
   $('state').innerHTML = keep
     ? '<span style="color:var(--keep-hi)">◉ KEEP</span>'
     : '<span style="color:var(--del-hi)">◉ DELETE</span>';
@@ -1098,6 +1105,23 @@ function setNavMode(mode) {
   refreshNavModeBtn();
 }
 
+function setAutoAdvance(on) {
+  S.autoAdvance = on;
+  store.set('vm.autoAdvance', on ? 'on' : 'off');
+  refreshAutoBtn();
+}
+
+function refreshAutoBtn() {
+  const b = $('bAuto');
+  if (!b) return;
+  b.textContent = S.autoAdvance ? 'Advance after marking' : 'Stay on file';
+  b.className = 'sm ' + (S.autoAdvance ? 'teal' : '');
+  b.title = S.autoAdvance
+    ? 'Marking keep or delete moves to the next file. Click to stay put.'
+    : 'Marking leaves you on the same file. Click to advance automatically.';
+}
+$('bAuto').onclick = () => setAutoAdvance(!S.autoAdvance);
+
 function refreshNavModeBtn() {
   const b = $('bNavMode');
   if (!b) return;
@@ -1118,8 +1142,13 @@ function stepFolder(d) {
   S.fi = (S.fi + d + S.folders.length) % S.folders.length; S.ii = 0; show();
 }
 function mark(keep) {
-  const f = curFile(); if (!f) return;
-  S.state.set(f.path, keep); show(); nextImage();
+  const f = curFile();
+  if (!f) return;
+  S.state.set(f.path, keep);
+  // Advancing automatically suits a first pass; staying put suits comparing a
+  // file against its neighbours or changing your mind about one.
+  if (S.autoAdvance) nextImage();
+  else show();
 }
 function toggleFlag() {
   const f = curFile(); if (!f) return;
@@ -2189,7 +2218,23 @@ console.log(`VisManager Web build ${BUILD}`);
  * The bar row wraps on narrow windows, so its height is not fixed; measuring
  * it is the only way to place things below it reliably.
  */
+/**
+ * Switch the control groups to compact form when the viewer is narrow.
+ *
+ * Same treatment the overlay bars already get in expanded and fullscreen mode:
+ * labels drop out and padding tightens, so the row keeps to one line instead
+ * of wrapping and stealing height from the stage.
+ */
+function updateBarDensity() {
+  const w = $('stage').clientWidth || innerWidth;
+  const tight = w < 1000 || document.body.classList.contains('expanded') ||
+                !!document.fullscreenElement;
+  $('topbars').classList.toggle('flat', tight);
+  $('isodock').classList.toggle('flat', tight);
+}
+
 function layoutOverlays() {
+  updateBarDensity();
   const bars = $('topbars'), stage = $('stagebox'), panel = $('cubePanel');
   if (!bars || !stage) return;
   const h = bars.offsetHeight || 0;
@@ -2500,7 +2545,7 @@ $('cpTol').onchange = () => rebuildMolecule();
 function toggleExpanded() {
   const on = !document.body.classList.contains('expanded');
   document.body.classList.toggle('expanded', on);
-  $('topbars').classList.toggle('flat', on);
+
   $('zExpand').textContent = on ? 'Restore' : 'Expand';
   setTimeout(resizeViewer, 50);
 }
@@ -2561,7 +2606,7 @@ function toggleFullscreen() {
 $('zFull').onclick = toggleFullscreen;
 document.addEventListener('fullscreenchange', () => {
   const on = !!document.fullscreenElement;
-  $('topbars').classList.toggle('flat', on || document.body.classList.contains('expanded'));
+  updateBarDensity();
   setBtnIcon('zFull', 'corners');
   // The canvas has a fixed pixel size, so it must be resized to the new box
   setTimeout(resizeViewer, 60);
@@ -2846,6 +2891,7 @@ function walk(entry, prefix, out) {
  * point; calling into them any earlier hits the temporal dead zone and the
  * ReferenceError aborts the rest of the script. */
 // Guarded: a failure in any one of these should not leave the page dead.
-for (const step of [refreshKeyCaps, refreshNavModeBtn, layoutOverlays, loadLocks]) {
+for (const step of [refreshKeyCaps, refreshNavModeBtn, refreshAutoBtn,
+                    layoutOverlays, loadLocks]) {
   try { step(); } catch (err) { console.error('init step failed:', err); }
 }
